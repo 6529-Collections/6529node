@@ -1,0 +1,53 @@
+version: '3'
+
+tasks:
+
+  install-dev-tools:
+    desc: Install dev tools (golangci-lint, goimports, etc.) in case they are missing
+    cmds:
+      - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+      - go install golang.org/x/tools/cmd/goimports@latest
+
+  tidy:
+    go mod tidy
+
+  build:
+    desc: Build the Go application
+    cmds:
+      - go build -o bin/6529node ./cmd/node
+
+  run:
+    desc: Run the Go application
+    cmds:
+      - go run ./cmd/node
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  format:
+    desc: Format code and fix imports
+    cmds:
+      - goimports -w .
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run
+
+  clean:
+    desc: Clean up build artifacts
+    cmds:
+      - rm -rf bin/
+
+  coverage:
+    desc: Create a test coverage report
+    cmds:
+      - go test ./... -coverprofile=coverage.out
+
+  coverage:
+    desc: Create a test coverage report
+    cmds:
+      - go test ./... -coverprofile=coverage.out
+      - go tool cover -html=coverage.out -o=coverage.html

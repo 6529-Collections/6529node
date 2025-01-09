@@ -1,0 +1,5 @@
+.DS_Store
+config.env
+bin
+coverage.out
+coverage.html
