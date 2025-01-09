@@ -42,12 +42,7 @@ tasks:
       - rm -rf bin/
 
   coverage:
-    desc: Create a test coverage report
-    cmds:
-      - go test ./... -coverprofile=coverage.out
-
-  coverage:
-    desc: Create a test coverage report
+    desc: Create a test coverage report ant its html version
     cmds:
       - go test ./... -coverprofile=coverage.out
       - go tool cover -html=coverage.out -o=coverage.html
