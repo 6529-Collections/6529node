@@ -6,6 +6,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var Version = "dev" // this is overridden by the release build script
+
 func init() {
 	zapConf := zap.Must(zap.NewProduction())
 	if config.Get().LogZapMode == "development" {
@@ -15,6 +17,6 @@ func init() {
 }
 
 func main() {
-	zap.L().Debug("Starting 6529-Collections/6529node...")
+	zap.L().Info("Starting 6529-Collections/6529node...", zap.String("Version", Version))
 	someservice.Run()
 }

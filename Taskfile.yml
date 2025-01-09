@@ -14,7 +14,7 @@ tasks:
   build:
     desc: Build the Go application
     cmds:
-      - go build -o bin/6529node ./cmd/node
+      - go build -ldflags="-X main.Version=$(git describe --exact-match --tags)" -o bin/6529node ./cmd/node
 
   run:
     desc: Run the Go application
@@ -46,3 +46,31 @@ tasks:
     cmds:
       - go test ./... -coverprofile=coverage.out
       - go tool cover -html=coverage.out -o=coverage.html
+
+  build-linux:
+    desc: "Build for Linux (amd64)"
+    cmds:
+      - GOOS=linux GOARCH=amd64 go build -ldflags="-X main.Version=$(git describe --exact-match --tags)" -o bin/6529node-linux-amd64-$(git describe --exact-match --tags) ./cmd/node
+
+  build-darwin:
+    desc: "Build for macOS (amd64)"
+    cmds:
+      - GOOS=darwin GOARCH=amd64 go build -ldflags="-X main.Version=$(git describe --exact-match --tags)" -o bin/6529node-darwin-amd64-$(git describe --exact-match --tags) ./cmd/node
+
+  build-darwin-arm:
+    desc: "Build for macOS (arm64, Apple Silicon)"
+    cmds:
+      - GOOS=darwin GOARCH=arm64 go build -ldflags="-X main.Version=$(git describe --exact-match --tags)" -o bin/6529node-linux-arm64-$(git describe --exact-match --tags) ./cmd/node
+
+  build-windows:
+    desc: "Build for Windows (amd64)"
+    cmds:
+      - GOOS=windows GOARCH=amd64 go build -ldflags="-X main.Version=$(git describe --exact-match --tags)" -o "bin/6529node-win-$(git describe --exact-match --tags).exe" ./cmd/node
+
+  build-all:
+    desc: "Build for all platforms (Linux, macOS, Windows)"
+    deps:
+      - build-linux
+      - build-darwin
+      - build-darwin-arm
+      - build-windows
