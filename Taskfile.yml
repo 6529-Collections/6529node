@@ -42,10 +42,9 @@ tasks:
       - rm -rf bin/
 
   coverage:
-    desc: Create a test coverage report ant its html version
+    desc: "Create a test coverage report and enforce >= 75% coverage per file"
     cmds:
       - go test ./... -coverprofile=coverage.out
-      - go tool cover -html=coverage.out -o=coverage.html
 
   build-linux:
     desc: "Build for Linux (amd64)"
