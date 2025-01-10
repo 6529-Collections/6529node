@@ -1,5 +1,7 @@
 # 6529 Core Node
 
+[![codecov](https://codecov.io/gh/6529-Collections/6529node/branch/main/graph/badge.svg)](https://codecov.io/gh/6529-Collections/6529node)
+
 Application that acts as 6529 Core node.
 
 ## Development

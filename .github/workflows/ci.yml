@@ -30,9 +30,9 @@ jobs:
         run: |
           task coverage
 
-      - name: Upload coverage artifact
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v3
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
         with:
-          name: coverage-report
-          path: coverage.html
+          files: coverage.out
+          flags: unittests
+          fail_ci_if_error: true

@@ -45,7 +45,7 @@ tasks:
     desc: "Create a test coverage report and enforce >= 75% coverage per file"
     cmds:
       - go test ./... -coverprofile=coverage.out
-
+      
   build-linux:
     desc: "Build for Linux (amd64)"
     cmds:
