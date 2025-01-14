@@ -3,3 +3,4 @@ config.env
 bin
 coverage.out
 coverage.html
+./db
