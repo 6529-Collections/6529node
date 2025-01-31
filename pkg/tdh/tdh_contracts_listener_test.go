@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/6529-Collections/6529node/internal/eth/mocks"
-	transferwatcher "github.com/6529-Collections/6529node/internal/eth/mocks/transferwatcher"
+	mocks "github.com/6529-Collections/6529node/internal/eth/mocks_test"
+	transferwatcher "github.com/6529-Collections/6529node/internal/eth/mocks_test/transferwatcher"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

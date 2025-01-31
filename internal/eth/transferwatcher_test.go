@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/6529-Collections/6529node/internal/eth/mocks"
+	mocks "github.com/6529-Collections/6529node/internal/eth/mocks_test"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -64,7 +64,7 @@ func (db *InMemoryBlockHashDb) RevertFromBlock(blockNumber uint64) error {
 	return nil
 }
 
-func makeHeader(num uint64, hash common.Hash) *types.Header {
+func makeHeader(num uint64, _ common.Hash) *types.Header {
 	return &types.Header{
 		Number: big.NewInt(int64(num)),
 		Extra:  []byte{},
