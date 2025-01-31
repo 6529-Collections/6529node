@@ -14,7 +14,7 @@ tasks:
   build:
     desc: Build the Go application
     cmds:
-      - go build -ldflags="-X main.Version=$(git describe --exact-match --tags)" -o bin/6529node ./cmd/node
+      - go build -o bin/6529node ./cmd/node
 
   run:
     desc: Run the Go application
@@ -24,7 +24,7 @@ tasks:
   test:
     desc: Run all tests
     cmds:
-      - go test ./...
+      - go test ./... -race
 
   format:
     desc: Format code and fix imports
@@ -42,7 +42,7 @@ tasks:
       - rm -rf bin/
 
   coverage:
-    desc: "Create a test coverage report and enforce >= 75% coverage per file"
+    desc: "Create a test coverage report"
     cmds:
       - go test ./... -coverprofile=coverage.out
       

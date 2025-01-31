@@ -1,5 +1,6 @@
 .DS_Store
 config.env
-bin
+/bin/
 coverage.out
 coverage.html
+/db/

@@ -12,15 +12,16 @@ import (
 
 type Config struct {
 	LogZapMode               string `mapstructure:"LOG_ZAP_MODE"`
-	SomeElse                 string `mapstructure:"SOME_ELSE"`
 	PrintConfigurationToLogs string `mapstructure:"PRINT_CONFIGURATION_TO_LOGS"`
+	EthereumNodeUrl          string `mapstructure:"ETHEREUM_NODE_URL"`
 }
 
 var lock = &sync.Mutex{}
 var config *Config
 
-// Makes sure Config is initialised only once and can't be mutated externally
-func Get() Config {
+var Get = get
+
+func get() Config {
 	if config == nil {
 		lock.Lock()
 		defer lock.Unlock()
