@@ -1,8 +1,9 @@
+ignore:
+  - "cmd/node/main.go"
+  - "internal/eth/mocks"
+
 coverage:
   status:
     project:
       default:
         target: 75
-        ignore:
-          - "cmd/node/main.go"
-          - "internal/eth/mocks"
