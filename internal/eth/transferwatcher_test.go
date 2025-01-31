@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	mocks "github.com/6529-Collections/6529node/internal/eth/mocks_test"
+	"github.com/6529-Collections/6529node/internal/eth/mocks"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
