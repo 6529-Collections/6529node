@@ -26,7 +26,7 @@ func TestTdhContractsListener_Listen_ProgressGreaterThanEpochBlock(t *testing.T)
 	mTransfersAction := new(mocks.TdhTransfersReceivedAction)
 	mTransfersWatcher := new(transferwatcher.TokensTransfersWatcher)
 
-	mIdxTracker.On("GetProgress").Return(uint64(14933650), nil).Once()
+	mIdxTracker.On("GetProgress").Return(uint64(13360878), nil).Once()
 	expectedStartBlock := TDH_CONTRACTS_EPOCH_BLOCK
 
 	mIdxTracker.On("SetProgress", mock.AnythingOfType("uint64")).Return(nil).Maybe()
@@ -45,7 +45,7 @@ func TestTdhContractsListener_Listen_ProgressGreaterThanEpochBlock(t *testing.T)
 			nftChan := args.Get(4).(chan<- []tokens.TokenTransfer)
 			lbChan := args.Get(5).(chan<- uint64)
 
-			lbChan <- 14933700
+			lbChan <- 13360878
 			nftChan <- []tokens.TokenTransfer{
 				{From: "0x111", To: "0x222"},
 			}
@@ -88,7 +88,7 @@ func TestTdhContractsListener_Listen_ProgressLessThanEpochBlock(t *testing.T) {
 	mTransfersAction := new(mocks.TdhTransfersReceivedAction)
 	mTransfersWatcher := new(transferwatcher.TokensTransfersWatcher)
 
-	mIdxTracker.On("GetProgress").Return(uint64(14930000), nil).Once()
+	mIdxTracker.On("GetProgress").Return(uint64(13360860), nil).Once()
 
 	mTransfersWatcher.
 		On("WatchTransfers",
@@ -172,20 +172,19 @@ func TestTdhContractsListener_Listen_ErrorOnWatchTransfers(t *testing.T) {
 	mTransfersAction := new(mocks.TdhTransfersReceivedAction)
 	mTransfersWatcher := new(transferwatcher.TokensTransfersWatcher)
 
-	mIdxTracker.On("GetProgress").Return(uint64(14933650), nil).Once()
+	mIdxTracker.On("GetProgress").Return(uint64(13360878), nil).Once()
 
 	mTransfersWatcher.
 		On("WatchTransfers",
 			mock.Anything,
 			mEthClient,
 			mock.Anything,
-			uint64(14933632),
+			uint64(13360860),
 			mock.Anything,
 			mock.Anything,
 		).
 		Return(errors.New("watch transfers failed")).
 		Once()
-
 	listener := TdhContractsListener{
 		ethClient:               mEthClient,
 		transfersWatcher:        mTransfersWatcher,
@@ -216,14 +215,14 @@ func TestTdhContractsListener_Listen_HandleErrorDoesNotStopLoop(t *testing.T) {
 	mTransfersAction := new(mocks.TdhTransfersReceivedAction)
 	mTransfersWatcher := new(transferwatcher.TokensTransfersWatcher)
 
-	mIdxTracker.On("GetProgress").Return(uint64(14933632), nil).Once()
+	mIdxTracker.On("GetProgress").Return(uint64(13360860), nil).Once()
 
 	mTransfersWatcher.
 		On("WatchTransfers",
 			mock.Anything,
 			mEthClient,
 			mock.Anything,
-			uint64(14933632),
+			uint64(13360860),
 			mock.Anything,
 			mock.Anything,
 		).
