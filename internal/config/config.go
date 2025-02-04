@@ -14,6 +14,8 @@ type Config struct {
 	LogZapMode               string `mapstructure:"LOG_ZAP_MODE"`
 	PrintConfigurationToLogs string `mapstructure:"PRINT_CONFIGURATION_TO_LOGS"`
 	EthereumNodeUrl          string `mapstructure:"ETHEREUM_NODE_URL"`
+	EnableP2P                bool   `mapstructure:"ENABLE_P2P"`
+	P2PBootstrapAddr         string `mapstructure:"P2P_BOOTSTRAP_ADDR"`
 }
 
 var lock = &sync.Mutex{}
