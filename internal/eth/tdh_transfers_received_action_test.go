@@ -9,7 +9,7 @@ import (
 
 func TestTdhTransfersReceivedAction_Handle(t *testing.T) {
 	action := &DefaultTdhTransfersReceivedAction{}
-	action.Handle(context.Background(), []tokens.TokenTransfer{
+	err := action.Handle(context.Background(), []tokens.TokenTransfer{
 		{
 			BlockNumber: 1,
 			TxHash:      "0x123",
@@ -20,4 +20,7 @@ func TestTdhTransfersReceivedAction_Handle(t *testing.T) {
 			Contract:    "0x123",
 		},
 	})
+	if err != nil {
+		t.Fatalf("error handling transfers: %v", err)
+	}
 }
