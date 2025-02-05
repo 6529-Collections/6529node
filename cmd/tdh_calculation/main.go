@@ -15,9 +15,9 @@ func init() {
 }
 
 func main() {
-    zap.L().Info("Starting 'tdh_calculation' task...")
+	zap.L().Info("Starting 'tdh_calculation' task...")
 
-    // Placeholder call to a function in the tdh package.
-    // We'll flesh this out as we go along.
-    tdh_calculation.RunTdhCalculation()
+	// Placeholder call to a function in the tdh package.
+	// We'll flesh this out as we go along.
+	tdh_calculation.RunTdhCalculation()
 }

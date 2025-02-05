@@ -81,7 +81,7 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(ctx context.Context, transfer
 				zap.L().Error("Failed to update ownership", zap.Error(err))
 				return fmt.Errorf("failed to update ownership: %w", err)
 			}
-			
+
 			zap.L().Info("Transfer processed", zap.String("tx", transfer.TxHash), zap.Uint64("logIndex", transfer.LogIndex))
 		}
 		return nil

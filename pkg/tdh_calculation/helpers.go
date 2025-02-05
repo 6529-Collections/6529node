@@ -5,8 +5,9 @@ import (
 )
 
 // ParseUTCDateString replicates parseUTCDateString(...) from TS:
-//   const parsedDate = moment.tz(dateString, "YYYY-MM-DD HH:mm:ss", "UTC");
-//   return parsedDate.toDate();
+//
+//	const parsedDate = moment.tz(dateString, "YYYY-MM-DD HH:mm:ss", "UTC");
+//	return parsedDate.toDate();
 func ParseUTCDateString(dateString string) time.Time {
 	// The Go equivalent to the moment(...) parse using the "YYYY-MM-DD HH:mm:ss" format in UTC
 	layout := "2006-01-02 15:04:05"
@@ -20,11 +21,11 @@ func ParseUTCDateString(dateString string) time.Time {
 }
 
 // GetLastTDH replicates getLastTDH(...) from TS:
-//   1. now = new Date()
-//   2. tdh = new Date( Date.UTC(year, month, day, 0, 0, 0, 0) )
-//   3. if (tdh > now) tdh = tdh - 24h
-//   4. tdhStr = moment(tdh).tz("UTC").format("YYYY-MM-DD HH:mm:ss")
-//   5. return parseUTCDateString(tdhStr)
+//  1. now = new Date()
+//  2. tdh = new Date( Date.UTC(year, month, day, 0, 0, 0, 0) )
+//  3. if (tdh > now) tdh = tdh - 24h
+//  4. tdhStr = moment(tdh).tz("UTC").format("YYYY-MM-DD HH:mm:ss")
+//  5. return parseUTCDateString(tdhStr)
 func GetLastTDH() time.Time {
 	now := time.Now().UTC()
 

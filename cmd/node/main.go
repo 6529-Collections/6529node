@@ -53,8 +53,8 @@ func main() {
 	go func() {
 		<-stop
 		zap.L().Info("Received shutdown signal, closing resources...")
-		cancel()           // Cancel context
-		badger.Close()     // Close BadgerDB
+		cancel()       // Cancel context
+		badger.Close() // Close BadgerDB
 		contractListener.Close()
 		os.Exit(0)
 	}()

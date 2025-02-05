@@ -1,0 +1,103 @@
+package eth
+
+import (
+    "testing"
+
+    "github.com/6529-Collections/6529node/pkg/constants"
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/require"
+)
+
+func TestOwnerDb(t *testing.T) {
+    db := newInMemoryBadger(t)
+    ownerDb := NewOwnerDb()
+
+    t.Run("GetBalance defaults to 0 when not found", func(t *testing.T) {
+        err := db.View(func(txn *badger.Txn) error {
+            bal, err := ownerDb.GetBalance(txn, "0xNoSuchOwner", "0xNO", "999")
+            require.NoError(t, err)
+            assert.Equal(t, int64(0), bal)
+            return nil
+        })
+        require.NoError(t, err)
+    })
+
+    t.Run("UpdateOwnership from NULL_ADDRESS (mint)", func(t *testing.T) {
+        // from=0x000 => doesn't check balance. to=0xAlice => +10
+        err := db.Update(func(txn *badger.Txn) error {
+            return ownerDb.UpdateOwnership(txn, constants.NULL_ADDRESS, "0xAlice", "0xERC721", "5", 10)
+        })
+        require.NoError(t, err)
+
+        // Now 0xAlice => 10
+        err = db.View(func(txn *badger.Txn) error {
+            bal, err := ownerDb.GetBalance(txn, "0xAlice", "0xERC721", "5")
+            require.NoError(t, err)
+            assert.Equal(t, int64(10), bal)
+            return nil
+        })
+        require.NoError(t, err)
+    })
+
+    t.Run("UpdateOwnership - insufficient balance returns error", func(t *testing.T) {
+        // 0xBob has 0 => can't send 5
+        err := db.Update(func(txn *badger.Txn) error {
+            return ownerDb.UpdateOwnership(txn, "0xBob", "0xCharlie", "0xERC721", "999", 5)
+        })
+        require.Error(t, err)
+        assert.Contains(t, err.Error(), "insufficient balance")
+    })
+
+    t.Run("UpdateOwnership - normal transfer", func(t *testing.T) {
+        // Let's transfer 4 out of 10 from 0xAlice => 0xBob for "0xERC721:5"
+        err := db.Update(func(txn *badger.Txn) error {
+            return ownerDb.UpdateOwnership(txn, "0xAlice", "0xBob", "0xERC721", "5", 4)
+        })
+        require.NoError(t, err)
+
+        // Check balances
+        err = db.View(func(txn *badger.Txn) error {
+            aBal, err := ownerDb.GetBalance(txn, "0xAlice", "0xERC721", "5")
+            require.NoError(t, err)
+            bBal, err := ownerDb.GetBalance(txn, "0xBob", "0xERC721", "5")
+            require.NoError(t, err)
+
+            assert.Equal(t, int64(6), aBal, "Alice had 10, transferred 4 => 6 left")
+            assert.Equal(t, int64(4), bBal, "Bob received 4")
+            return nil
+        })
+        require.NoError(t, err)
+    })
+
+    t.Run("UpdateOwnership - zero-balance cleanup", func(t *testing.T) {
+        // Let's have 0xBob => 0xCharlie all 4 => Bob => 0
+        err := db.Update(func(txn *badger.Txn) error {
+            return ownerDb.UpdateOwnership(txn, "0xBob", "0xCharlie", "0xERC721", "5", 4)
+        })
+        require.NoError(t, err)
+
+        // Bob => 0 => no key
+        err = db.View(func(txn *badger.Txn) error {
+            bBal, err := ownerDb.GetBalance(txn, "0xBob", "0xERC721", "5")
+            require.NoError(t, err)
+            assert.Equal(t, int64(0), bBal)
+            return nil
+        })
+        require.NoError(t, err)
+    })
+
+    t.Run("GetOwnersByNft - multiple owners", func(t *testing.T) {
+        // We have 0xAlice => 6, 0xCharlie => 4 for "0xERC721:5"
+        // let's confirm it sees both
+        err := db.View(func(txn *badger.Txn) error {
+            owners, err := ownerDb.GetOwnersByNft(txn, "0xERC721", "5")
+            require.NoError(t, err)
+            // { "0xAlice":6, "0xCharlie":4 }
+            assert.Len(t, owners, 2)
+            assert.Equal(t, int64(6), owners["0xAlice"])
+            assert.Equal(t, int64(4), owners["0xCharlie"])
+            return nil
+        })
+        require.NoError(t, err)
+    })
+}
