@@ -1,11 +1,6 @@
-package p2p
+package noop
 
-type NetworkTransport interface {
-	Start() error
-	Stop() error
-	Publish(topic string, data []byte) error
-	Subscribe(topic string, handler func(msg []byte)) error
-}
+import "github.com/6529-Collections/6529node/internal/network"
 
 type NoopTransport struct{}
 
@@ -23,4 +18,8 @@ func (n *NoopTransport) Publish(topic string, data []byte) error {
 
 func (n *NoopTransport) Subscribe(topic string, handler func(msg []byte)) error {
 	return nil
+}
+
+func NewNoopTransport() network.NetworkTransport {
+	return &NoopTransport{}
 }

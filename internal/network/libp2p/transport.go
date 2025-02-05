@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/6529-Collections/6529node/internal/p2p"
+	"github.com/6529-Collections/6529node/internal/network"
 	lp2p "github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/multiformats/go-multiaddr"
@@ -15,6 +15,7 @@ import (
 )
 
 type Libp2pTransport struct {
+	remote string
 	h      host.Host
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -23,8 +24,10 @@ type Libp2pTransport struct {
 	subs map[string]*pubsub.Subscription
 }
 
-func NewLibp2pTransport() p2p.NetworkTransport {
-	return &Libp2pTransport{}
+func NewLibp2pTransport(remote string, ctx context.Context) (network.NetworkTransport, error) {
+	lp2pTransport := &Libp2pTransport{remote: remote, ctx: ctx}
+	err := lp2pTransport.connect()
+	return lp2pTransport, err
 }
 
 func (l *Libp2pTransport) Start() error {
@@ -101,8 +104,8 @@ func (l *Libp2pTransport) Subscribe(topic string, handler func(msg []byte)) erro
 	return nil
 }
 
-func (l *Libp2pTransport) Connect(remote string) error {
-	ma, err := multiaddr.NewMultiaddr(remote)
+func (l *Libp2pTransport) connect() error {
+	ma, err := multiaddr.NewMultiaddr(l.remote)
 	if err != nil {
 		return fmt.Errorf("invalid multiaddr: %w", err)
 	}
