@@ -4,3 +4,4 @@ config.env
 coverage.out
 coverage.html
 /db/
+dump.txt

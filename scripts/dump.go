@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"log"
+	"os"
 	"unicode"
 
 	"github.com/dgraph-io/badger/v4"
@@ -13,13 +15,32 @@ import (
 const dbPath = "./db"
 
 func main() {
+	// Command-line flags
+	outputMode := flag.String("o", "console", "Output mode: 'console' or 'file'")
+	outputFile := flag.String("f", "dump.txt", "Output file (if mode is 'file')")
+	flag.Parse()
+
+	var out *os.File
+	var err error
+
+	// Handle output destination
+	if *outputMode == "file" {
+		out, err = os.Create(*outputFile)
+		if err != nil {
+			log.Fatalf("Failed to create output file: %v", err)
+		}
+		defer out.Close()
+	} else {
+		out = os.Stdout // Default to console
+	}
+
 	db, err := badger.Open(badger.DefaultOptions(dbPath).WithReadOnly(true))
 	if err != nil {
 		log.Fatalf("Failed to open BadgerDB: %v", err)
 	}
 	defer db.Close()
 
-	fmt.Println("Dumping BadgerDB contents...")
+	fmt.Println("Dumping BadgerDB contents to", *outputMode)
 
 	err = db.View(func(txn *badger.Txn) error {
 		it := txn.NewIterator(badger.DefaultIteratorOptions)
@@ -43,33 +64,33 @@ func main() {
 			}
 
 			err := item.Value(func(val []byte) error {
-				fmt.Printf("Key: %s\n", keyStr)
+				fmt.Fprintf(out, "Key: %s\n", keyStr)
 				if hasNumericSuffix {
-					fmt.Printf("  Prefix: %s\n", keyPrefix)
-					fmt.Printf("  Numeric Suffix (uint64): %d\n", numericValue)
+					fmt.Fprintf(out, "  Prefix: %s\n", keyPrefix)
+					fmt.Fprintf(out, "  Numeric Suffix (uint64): %d\n", numericValue)
 				}
 
 				// Value processing
 				if len(val) == 8 {
 					// Big-endian uint64
 					num := binary.BigEndian.Uint64(val)
-					fmt.Printf("  Value (uint64): %d\n", num)
+					fmt.Fprintf(out, "  Value (uint64): %d\n", num)
 				} else if len(val) == 32 {
 					// Probably a hash (Ethereum block/tx hash)
-					fmt.Printf("  Value (Hex, 32-byte data): %s\n", hex.EncodeToString(val))
+					fmt.Fprintf(out, "  Value (Hex, 32-byte data): %s\n", hex.EncodeToString(val))
 				} else if isPrintable(val) {
 					// Printable string
-					fmt.Printf("  Value (String): %s\n", string(val))
+					fmt.Fprintf(out, "  Value (String): %s\n", string(val))
 				} else {
 					// Unknown binary data
-					fmt.Printf("  Value (Hex): %s\n", hex.EncodeToString(val))
+					fmt.Fprintf(out, "  Value (Hex): %s\n", hex.EncodeToString(val))
 				}
-				fmt.Println("-------------------------")
+				fmt.Fprintln(out, "-------------------------")
 				return nil
 			})
 
 			if err != nil {
-				fmt.Printf("  [ERROR] Could not read value: %v\n", err)
+				fmt.Fprintf(out, "  [ERROR] Could not read value: %v\n", err)
 			}
 		}
 		return nil

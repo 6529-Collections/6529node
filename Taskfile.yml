@@ -22,7 +22,7 @@ tasks:
   dump-db:
     desc: Dump the BadgerDB
     cmds:
-      - go run scripts/dump.go
+      - go run ./scripts/dump.go {{.CLI_ARGS | default ""}}
 
   tdh_calculation:
     desc: Run the TDH calculation
