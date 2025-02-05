@@ -48,7 +48,10 @@ func (client TdhContractsListener) Listen(
 	latestBlockChannel := make(chan uint64)
 	go func() {
 		for latestBlock := range latestBlockChannel {
-			client.progressTracker.SetProgress(latestBlock)
+			err := client.progressTracker.SetProgress(latestBlock)
+			if err != nil {
+				zap.L().Error("Error setting progress", zap.Error(err))
+			}
 		}
 	}()
 	return client.transfersWatcher.WatchTransfers(

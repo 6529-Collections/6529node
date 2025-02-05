@@ -22,9 +22,17 @@ jobs:
           go install github.com/go-task/task/v3/cmd/task@latest
           echo "$HOME/go/bin" >> $GITHUB_PATH
 
+      - name: Install dev tools
+        run: |
+          task install-dev-tools
+
       - name: Build
         run: |
           task build
+
+      - name: Lint
+        run: |
+          task lint
 
       - name: Run tests and coverage
         run: |

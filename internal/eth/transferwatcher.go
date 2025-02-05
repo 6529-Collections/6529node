@@ -260,11 +260,15 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 				zap.String("oldHash", recordedHash.Hex()),
 				zap.String("newHash", chainHash.Hex()),
 			)
-			w.BlockTracker.RevertFromBlock(b)
+			_ = w.BlockTracker.RevertFromBlock(b)
 			return ErrReorgDetected
 		}
 		if !found {
-			w.BlockTracker.SetHash(b, chainHash)
+			err := w.BlockTracker.SetHash(b, chainHash)
+			if err != nil {
+				zap.L().Error("Could not set block hash", zap.Uint64("block", b), zap.Error(err))
+				return err
+			}
 		}
 
 		if time.Since(lastLogTime) >= 10*time.Second {
@@ -331,7 +335,11 @@ func (w *DefaultTokensTransfersWatcher) checkAndHandleReorg(
 	}
 	if reorgStart > 0 {
 		zap.L().Warn("Deep reorg detected", zap.Uint64("reorgStartBlock", reorgStart))
-		w.BlockTracker.RevertFromBlock(reorgStart)
+		err := w.BlockTracker.RevertFromBlock(reorgStart)
+		if err != nil {
+			zap.L().Error("Could not revert block hash", zap.Uint64("block", reorgStart), zap.Error(err))
+			return err
+		}
 		return ErrReorgDetected
 	}
 	return nil
