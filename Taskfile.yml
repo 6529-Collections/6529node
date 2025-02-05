@@ -1,15 +1,13 @@
-version: '3'
+version: "3"
 
 tasks:
-
   install-dev-tools:
     desc: Install dev tools (golangci-lint, goimports, etc.) in case they are missing
     cmds:
       - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
       - go install golang.org/x/tools/cmd/goimports@latest
 
-  tidy:
-    go mod tidy
+  tidy: go mod tidy
 
   build:
     desc: Build the Go application
@@ -20,6 +18,16 @@ tasks:
     desc: Run the Go application
     cmds:
       - go run ./cmd/node
+
+  dump-db:
+    desc: Dump the BadgerDB
+    cmds:
+      - go run scripts/dump.go
+
+  tdh_calculation:
+    desc: Run the TDH calculation
+    cmds:
+      - go run ./cmd/tdh_calculation
 
   test:
     desc: Run all tests
@@ -45,7 +53,7 @@ tasks:
     desc: "Create a test coverage report"
     cmds:
       - go test ./... -coverprofile=coverage.out
-      
+
   build-linux:
     desc: "Build for Linux (amd64)"
     cmds:

@@ -2,10 +2,11 @@ package tdh
 
 import (
 	"context"
+	"os"
 
 	"github.com/6529-Collections/6529node/internal/eth"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
-	"github.com/dgraph-io/badger/v3"
+	"github.com/dgraph-io/badger/v4"
 	"go.uber.org/zap"
 )
 
@@ -32,6 +33,7 @@ func (client TdhContractsListener) Listen(
 			err := client.transfersReceivedAction.Handle(ctx, batch)
 			if err != nil {
 				zap.L().Error("Error handling transfers", zap.Error(err))
+				os.Exit(1) 
 			}
 		}
 	}()
@@ -79,7 +81,7 @@ func CreateTdhContractsListener(badger *badger.DB) (*TdhContractsListener, error
 			Decoder:      &eth.DefaultEthTransactionLogsDecoder{},
 			BlockTracker: eth.NewBlockHashDb(badger),
 		},
-		transfersReceivedAction: &eth.DefaultTdhTransfersReceivedAction{},
+		transfersReceivedAction: eth.NewTdhTransfersReceivedActionImpl(badger),
 		progressTracker:         eth.NewTdhIdxTrackerDb(badger),
 	}, nil
 }
