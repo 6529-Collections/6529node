@@ -25,7 +25,9 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(ctx context.Context, transfer
 			zap.String("to", transfer.To),
 			zap.String("tokenId", transfer.TokenID),
 			zap.Int64("amount", transfer.Amount),
-			zap.String("contract", transfer.Contract))
+			zap.String("contract", transfer.Contract),
+			zap.String("type", transfer.Type.String()),
+		)
 	}
 	return nil
 }
