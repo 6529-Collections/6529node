@@ -9,7 +9,7 @@ func (t TransferType) String() string {
 const (
 	SALE    TransferType = "SALE"
 	OTHER   TransferType = "OTHER"
-	AIRDROP TransferType = "AIRDROPPED"
+	AIRDROP TransferType = "AIRDROP"
 	MINT    TransferType = "MINT"
 	BURN    TransferType = "BURN"
 )
