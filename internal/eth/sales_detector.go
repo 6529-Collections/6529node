@@ -949,7 +949,7 @@ func (d *DefaultSalesDetector) DetectIfSale(
 		case toLower == "0x0000000000000000000000000000000000000000":
 			result[i] = tokens.BURN
 		default:
-			result[i] = tokens.OTHER
+			result[i] = tokens.SEND
 		}
 	}
 
@@ -968,7 +968,7 @@ func (d *DefaultSalesDetector) DetectIfSale(
 
 	if isSale {
 		for i := range nftTransfers {
-			if result[i] == tokens.OTHER {
+			if result[i] == tokens.SEND {
 				result[i] = tokens.SALE
 			}
 		}

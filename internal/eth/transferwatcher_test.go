@@ -164,8 +164,8 @@ func testWatchTransfersSimplePolling(t *testing.T) {
 	// For simplicity, we can have the SaleDetector return an empty classification for each TX
 	mockSalesDetector.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
 		Return(map[int]tokens.TransferType{
-			0: tokens.OTHER,
-			1: tokens.OTHER,
+			0: tokens.SEND,
+			1: tokens.SEND,
 		}, nil).
 		Maybe()
 
@@ -324,7 +324,7 @@ func testWatchTransfersSubscription(t *testing.T) {
 
 	mockSalesDetector.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
 		Return(map[int]tokens.TransferType{
-			0: tokens.OTHER,
+			0: tokens.SEND,
 		}, nil).
 		Maybe()
 
@@ -550,8 +550,8 @@ func testPollingErrorAndRecovery(t *testing.T) {
 
 	mockSales.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
 		Return(map[int]tokens.TransferType{
-			0: tokens.OTHER,
-			1: tokens.OTHER,
+			0: tokens.SEND,
+			1: tokens.SEND,
 		}, nil).Maybe()
 
 	safeHash := makeHash(0xAB)
@@ -833,21 +833,21 @@ func testWatchTransfersSaleDetectionSuccess(t *testing.T) {
 		BlockNumber:      100,
 		LogIndex:         1,
 		TransactionIndex: 0,
-		Type:             tokens.OTHER,
+		Type:             tokens.SEND,
 	}
 	txa2 := tokens.TokenTransfer{
 		TxHash:           "0xABC",
 		BlockNumber:      100,
 		LogIndex:         2,
 		TransactionIndex: 0,
-		Type:             tokens.OTHER,
+		Type:             tokens.SEND,
 	}
 	txb1 := tokens.TokenTransfer{
 		TxHash:           "0xDEF",
 		BlockNumber:      100,
 		LogIndex:         3,
 		TransactionIndex: 1,
-		Type:             tokens.OTHER,
+		Type:             tokens.SEND,
 	}
 
 	mockDecoder.
@@ -880,7 +880,7 @@ func testWatchTransfersSaleDetectionSuccess(t *testing.T) {
 		On("DetectIfSale", mock.Anything, txHashA, mock.AnythingOfType("[]tokens.TokenTransfer")).
 		Return(map[int]tokens.TransferType{
 			0: tokens.SALE,
-			1: tokens.OTHER,
+			1: tokens.SEND,
 		}, nil).
 		Once()
 
@@ -914,7 +914,7 @@ func testWatchTransfersSaleDetectionSuccess(t *testing.T) {
 	}
 	assert.Len(t, gotTransfers, 3, "Should emit 3 xfers from block=100")
 	assert.Equal(t, tokens.SALE, gotTransfers[0].Type, "0xABC index0 => SALE")
-	assert.Equal(t, tokens.OTHER, gotTransfers[1].Type, "0xABC index1 => OTHER")
+	assert.Equal(t, tokens.SEND, gotTransfers[1].Type, "0xABC index1 => SEND")
 	assert.Equal(t, tokens.AIRDROP, gotTransfers[2].Type, "0xDEF => AIRDROP")
 
 	select {
@@ -980,7 +980,7 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 		BlockNumber:      200,
 		LogIndex:         3,
 		TransactionIndex: 0,
-		Type:             tokens.OTHER,
+		Type:             tokens.SEND,
 	}
 	mockDecoder.
 		On("Decode", logs).
@@ -1035,7 +1035,7 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 	}
 
 	assert.Len(t, gotTransfers, 1)
-	assert.Equal(t, tokens.OTHER, gotTransfers[0].Type, "No classification if sale detection fails")
+	assert.Equal(t, tokens.SEND, gotTransfers[0].Type, "No classification if sale detection fails")
 
 	select {
 	case latest := <-latestBlockChan:

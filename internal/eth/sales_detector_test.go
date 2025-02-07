@@ -41,7 +41,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 		TokenID:     "42",
 	}}
 
-	t.Run("No receipt => OTHER", func(t *testing.T) {
+	t.Run("No receipt => SEND", func(t *testing.T) {
 		mockClient := new(mocks.EthClient)
 		detector := NewDefaultSalesDetector(mockClient)
 
@@ -52,7 +52,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 
 		results, err := detector.DetectIfSale(context.Background(), testTxHash, nftTransfers)
 		require.NoError(t, err)
-		assert.Equal(t, tokens.OTHER, results[0])
+		assert.Equal(t, tokens.SEND, results[0])
 
 		mockClient.AssertExpectations(t)
 	})
@@ -214,7 +214,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 		mockClient.AssertExpectations(t)
 	})
 
-	t.Run("No triggers => OTHER", func(t *testing.T) {
+	t.Run("No triggers => SEND", func(t *testing.T) {
 		mockClient := new(mocks.EthClient)
 		detector := NewDefaultSalesDetector(mockClient)
 
@@ -233,7 +233,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 
 		results, err := detector.DetectIfSale(context.Background(), testTxHash, nftTransfers)
 		require.NoError(t, err)
-		assert.Equal(t, tokens.OTHER, results[0])
+		assert.Equal(t, tokens.SEND, results[0])
 
 		mockClient.AssertExpectations(t)
 	})
