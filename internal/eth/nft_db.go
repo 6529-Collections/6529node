@@ -17,6 +17,7 @@ DB Indexes Created Here:
 */
 
 type NFTDb interface {
+	ResetNFTs(db *badger.DB) error
 	GetNFT(txn *badger.Txn, contract, tokenID string) (*NFT, error)
 	UpdateSupply(txn *badger.Txn, contract, tokenID string, delta int64) error
 	UpdateBurntSupply(txn *badger.Txn, contract, tokenID string, delta int64) error
@@ -57,6 +58,13 @@ func (n *NFTDbImpl) GetNFT(txn *badger.Txn, contract, tokenID string) (*NFT, err
 	}
 
 	return &nft, nil
+}
+
+func (n *NFTDbImpl) ResetNFTs(db *badger.DB) error {
+    if err := db.DropPrefix([]byte(nftPrefix)); err != nil {
+        return fmt.Errorf("failed to drop prefix %s: %w", nftPrefix, err)
+    }
+    return nil
 }
 
 // UpdateSupply increases the total supply when minting.

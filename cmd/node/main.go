@@ -12,55 +12,67 @@ import (
 	"go.uber.org/zap"
 )
 
-var Version = "dev" // This is overridden by the release build script
+var Version = "dev" // Overridden by the release build script
 
 func init() {
-	zapConf := zap.Must(zap.NewProduction())
-	if config.Get().LogZapMode == "development" {
-		zapConf = zap.Must(zap.NewDevelopment())
-	}
-	zap.ReplaceGlobals(zapConf)
+    zapConf := zap.Must(zap.NewProduction())
+    if config.Get().LogZapMode == "development" {
+        zapConf = zap.Must(zap.NewDevelopment())
+    }
+    zap.ReplaceGlobals(zapConf)
 }
 
 func main() {
-	zap.L().Info("Starting 6529-Collections/6529node...", zap.String("Version", Version))
+    zap.L().Info("Starting 6529-Collections/6529node...", zap.String("Version", Version))
 
-	// Open BadgerDB
-	badger, err := db.OpenBadger("./db")
-	if err != nil {
-		zap.L().Error("Failed to open BadgerDB", zap.Error(err))
-		return
-	}
-	defer func() {
-		zap.L().Info("Closing BadgerDB...")
-		badger.Close()
-	}()
+    // Open BadgerDB
+    badgerDB, err := db.OpenBadger("./db")
+    if err != nil {
+        zap.L().Error("Failed to open BadgerDB", zap.Error(err))
+        return
+    }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+    // Create context that we can cancel on shutdown
+    ctx, cancel := context.WithCancel(context.Background())
 
-	contractListener, err := tdh.CreateTdhContractsListener(badger)
-	if err != nil {
-		zap.L().Error("Failed to create Ethereum client", zap.Error(err))
-		return
-	}
-	defer contractListener.Close()
+    // Set up the contract listener
+    contractListener, err := tdh.CreateTdhContractsListener(badgerDB)
+    if err != nil {
+        zap.L().Error("Failed to create Ethereum client", zap.Error(err))
+        cancel()
+        _ = badgerDB.Close()
+        return
+    }
 
-	// Handle graceful shutdown
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+    // Channel to catch OS signals
+    stop := make(chan os.Signal, 1)
+    signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
-	go func() {
-		<-stop
-		zap.L().Info("Received shutdown signal, closing resources...")
-		cancel()       // Cancel context
-		badger.Close() // Close BadgerDB
-		contractListener.Close()
-		os.Exit(0)
-	}()
+    // We'll run the listener in a separate goroutine,
+    // so the main goroutine can wait for a signal.
+    done := make(chan struct{})
 
-	// Start contract listener
-	if err := contractListener.Listen(ctx); err != nil {
-		zap.L().Error("Failed to watch contract events", zap.Error(err))
-	}
+    go func() {
+        defer close(done)
+        // If Listen() is blocking, it will exit when `ctx` is canceled (or on error).
+        if err := contractListener.Listen(ctx); err != nil {
+            zap.L().Error("Failed to watch contract events", zap.Error(err))
+        }
+    }()
+
+    // Wait for OS signal
+    <-stop
+    zap.L().Info("Received shutdown signal, closing resources...")
+
+    // 1) Cancel the context => tell Listen to exit
+    cancel()
+
+    // 2) Wait until the listener goroutine actually returns
+    <-done
+
+    // 3) Now we can safely close everything
+    contractListener.Close()
+    _ = badgerDB.Close()
+
+    zap.L().Info("Shutdown complete")
 }

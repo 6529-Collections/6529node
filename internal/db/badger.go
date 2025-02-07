@@ -35,7 +35,7 @@ func OpenBadger(path string) (*badger.DB, error) {
 		return nil, fmt.Errorf("failed to create directory for BadgerDB: %w", err)
 	}
 
-	opts := badger.DefaultOptions(path)
+	opts := badger.DefaultOptions(path).WithSyncWrites(true)
 	opts.Logger = zapAdapter{zap.L()}
 
 	db, err := badger.Open(opts)

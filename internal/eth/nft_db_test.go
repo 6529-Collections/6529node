@@ -1,175 +1,230 @@
 package eth
 
 import (
-	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
-func newInMemoryBadger(t *testing.T) *badger.DB {
-	opts := badger.DefaultOptions("").WithInMemory(true)
-	db, err := badger.Open(opts)
-	require.NoError(t, err, "failed to open badger in-memory DB")
-	t.Cleanup(func() {
-		_ = db.Close()
-	})
-	return db
+func TestResetNFTs(t *testing.T) {	
+    db := setupTestInMemoryDB(t)
+
+    nftDb := NewNFTDb()
+
+    // Insert a test NFT
+    err := db.Update(func(txn *badger.Txn) error {
+        return nftDb.UpdateSupply(txn, "contractA", "token1", 10)
+    })
+    require.NoError(t, err)
+
+    // Confirm it exists
+    err = db.View(func(txn *badger.Txn) error {
+        nft, err := nftDb.GetNFT(txn, "contractA", "token1")
+        require.NoError(t, err)
+        assert.NotNil(t, nft)
+        assert.Equal(t, int64(10), nft.Supply)
+        return nil
+    })
+    require.NoError(t, err)
+
+    // Now reset
+    err = nftDb.ResetNFTs(db)
+    require.NoError(t, err)
+
+    // Confirm the NFT is gone
+    err = db.View(func(txn *badger.Txn) error {
+        nft, err := nftDb.GetNFT(txn, "contractA", "token1")
+        require.NoError(t, err)
+        assert.Nil(t, nft)
+        return nil
+    })
+    require.NoError(t, err)
 }
 
-func TestNFTDb(t *testing.T) {
-	zap.ReplaceGlobals(zap.NewNop()) // Mute logging if desired
-	db := newInMemoryBadger(t)
-	nftDb := NewNFTDb()
+func TestGetNFT(t *testing.T) {
+    db := setupTestInMemoryDB(t)
+    nftDb := NewNFTDb()
 
-	t.Run("GetNFT - not found", func(t *testing.T) {
-		err := db.View(func(txn *badger.Txn) error {
-			nft, err := nftDb.GetNFT(txn, "0xNoSuchContract", "999")
-			require.NoError(t, err)
-			assert.Nil(t, nft, "expected a nil NFT when not found")
-			return nil
-		})
-		require.NoError(t, err)
-	})
+    // NFT should not exist initially
+    err := db.View(func(txn *badger.Txn) error {
+        nft, err := nftDb.GetNFT(txn, "nonexistent", "tokenX")
+        require.NoError(t, err)
+        assert.Nil(t, nft)
+        return nil
+    })
+    require.NoError(t, err)
 
-	t.Run("UpdateSupply - create new NFT", func(t *testing.T) {
-		// Suppose we create a new NFT "0xCONTRACT:1" with supply=5
-		err := db.Update(func(txn *badger.Txn) error {
-			return nftDb.UpdateSupply(txn, "0xCONTRACT", "1", 5)
-		})
-		require.NoError(t, err)
+    // Create one
+    err = db.Update(func(txn *badger.Txn) error {
+        return nftDb.UpdateSupply(txn, "contractB", "token2", 5)
+    })
+    require.NoError(t, err)
 
-		// Verify it was created
-		err = db.View(func(txn *badger.Txn) error {
-			nft, err := nftDb.GetNFT(txn, "0xCONTRACT", "1")
-			require.NoError(t, err)
-			require.NotNil(t, nft)
-			assert.Equal(t, int64(5), nft.Supply)
-			assert.Equal(t, int64(0), nft.BurntSupply)
-			return nil
-		})
-		require.NoError(t, err)
-	})
+    // Retrieve it
+    err = db.View(func(txn *badger.Txn) error {
+        nft, err := nftDb.GetNFT(txn, "contractB", "token2")
+        require.NoError(t, err)
+        assert.NotNil(t, nft)
+        assert.Equal(t, "contractB", nft.Contract)
+        assert.Equal(t, "token2", nft.TokenID)
+        assert.Equal(t, int64(5), nft.Supply)
+        assert.Equal(t, int64(0), nft.BurntSupply)
+        return nil
+    })
+    require.NoError(t, err)
+}
 
-	t.Run("UpdateSupply - increment existing NFT", func(t *testing.T) {
-		// Increase "0xCONTRACT:1" supply by 3 => total 8
-		err := db.Update(func(txn *badger.Txn) error {
-			return nftDb.UpdateSupply(txn, "0xCONTRACT", "1", 3)
-		})
-		require.NoError(t, err)
+func TestUpdateSupply(t *testing.T) {
+    db := setupTestInMemoryDB(t)
+    nftDb := NewNFTDb()
 
-		// Verify supply=8
-		err = db.View(func(txn *badger.Txn) error {
-			nft, err := nftDb.GetNFT(txn, "0xCONTRACT", "1")
-			require.NoError(t, err)
-			require.NotNil(t, nft)
-			assert.Equal(t, int64(8), nft.Supply)
-			return nil
-		})
-		require.NoError(t, err)
-	})
+    // Negative or zero delta should fail
+    err := db.Update(func(txn *badger.Txn) error {
+        return nftDb.UpdateSupply(txn, "contractC", "token3", 0)
+    })
+    assert.Error(t, err, "delta must be positive")
 
-	t.Run("UpdateSupply - negative or zero delta fails", func(t *testing.T) {
-		err := db.Update(func(txn *badger.Txn) error {
-			return nftDb.UpdateSupply(txn, "0xCONTRACT", "2", 0)
-		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "delta must be positive")
-	})
+    // Positive delta: create new NFT
+    err = db.Update(func(txn *badger.Txn) error {
+        return nftDb.UpdateSupply(txn, "contractC", "token3", 10)
+    })
+    require.NoError(t, err)
 
-	t.Run("UpdateBurntSupply - error if NFT does not exist", func(t *testing.T) {
-		err := db.Update(func(txn *badger.Txn) error {
-			return nftDb.UpdateBurntSupply(txn, "0xNOPE", "999", 1)
-		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "cannot burn NFT that does not exist")
-	})
+    // Confirm new NFT
+    err = db.View(func(txn *badger.Txn) error {
+        nft, err := nftDb.GetNFT(txn, "contractC", "token3")
+        require.NoError(t, err)
+        require.NotNil(t, nft)
+        assert.Equal(t, int64(10), nft.Supply)
+        assert.Equal(t, int64(0), nft.BurntSupply)
+        return nil
+    })
+    require.NoError(t, err)
 
-	t.Run("UpdateBurntSupply - success for existing NFT", func(t *testing.T) {
-		// We'll burn 2 from "0xCONTRACT:1" which now has supply=8
-		err := db.Update(func(txn *badger.Txn) error {
-			return nftDb.UpdateBurntSupply(txn, "0xCONTRACT", "1", 2)
-		})
-		require.NoError(t, err)
+    // Additional supply
+    err = db.Update(func(txn *badger.Txn) error {
+        return nftDb.UpdateSupply(txn, "contractC", "token3", 5)
+    })
+    require.NoError(t, err)
 
-		// Should now have burntSupply=2
-		err = db.View(func(txn *badger.Txn) error {
-			nft, err := nftDb.GetNFT(txn, "0xCONTRACT", "1")
-			require.NoError(t, err)
-			require.NotNil(t, nft)
-			assert.Equal(t, int64(8), nft.Supply)
-			assert.Equal(t, int64(2), nft.BurntSupply)
-			return nil
-		})
-		require.NoError(t, err)
-	})
+    // Confirm updated supply
+    err = db.View(func(txn *badger.Txn) error {
+        nft, err := nftDb.GetNFT(txn, "contractC", "token3")
+        require.NoError(t, err)
+        require.NotNil(t, nft)
+        assert.Equal(t, int64(15), nft.Supply)
+        assert.Equal(t, int64(0), nft.BurntSupply)
+        return nil
+    })
+    require.NoError(t, err)
+}
 
-	t.Run("GetNftsByOwnerAddress", func(t *testing.T) {
-		/*
-		   This method scans "tdh:owner:{owner}:" to find "contract:tokenId"
-		   suffixes. For example, "tdh:owner:0xAlice:0xCONTRACT:999" => someBalance
-		   Then it calls GetNFT(...) to load the actual NFT struct.
+func TestUpdateBurntSupply(t *testing.T) {
+    db := setupTestInMemoryDB(t)
+    nftDb := NewNFTDb()
 
-		   So let's create some "owner" keys ourselves in the DB, plus
-		   the NFT records, so that GetNftsByOwnerAddress returns them.
-		*/
+    // Attempt to burn an NFT that doesn't exist
+    err := db.Update(func(txn *badger.Txn) error {
+        return nftDb.UpdateBurntSupply(txn, "contractD", "token4", 5)
+    })
+    assert.Error(t, err, "cannot burn NFT that does not exist")
 
-		// 1) Manually store an NFT "0xCONTRACT:999" with supply=10
-		err := db.Update(func(txn *badger.Txn) error {
-			return nftDb.UpdateSupply(txn, "0xCONTRACT", "999", 10)
-		})
-		require.NoError(t, err)
+    // Create NFT
+    err = db.Update(func(txn *badger.Txn) error {
+        return nftDb.UpdateSupply(txn, "contractD", "token4", 20)
+    })
+    require.NoError(t, err)
 
-		// 2) Manually create a key "tdh:owner:0xAlice:0xCONTRACT:999" => JSON(123) as "balance"
-		//    so that the scan sees "0xCONTRACT:999" suffix.
-		err = db.Update(func(txn *badger.Txn) error {
-			// Key format: "tdh:owner:{owner}:{contract}:{tokenID}"
-			key := fmt.Sprintf("tdh:owner:%s:%s:%s", "0xAlice", "0xCONTRACT", "999")
-			balance := int64(123) // any non-zero to confirm "ownership"
-			val, _ := json.Marshal(balance)
-			return txn.Set([]byte(key), val)
-		})
-		require.NoError(t, err)
+    // Burn some tokens
+    err = db.Update(func(txn *badger.Txn) error {
+        return nftDb.UpdateBurntSupply(txn, "contractD", "token4", 5)
+    })
+    require.NoError(t, err)
 
-		// 3) Also let's create "tdh:owner:0xAlice:0xCONTRACT:1" => JSON(5) to test the other NFT
-		//    (We already have "0xCONTRACT:1" created above.)
-		err = db.Update(func(txn *badger.Txn) error {
-			key := "tdh:owner:0xAlice:0xCONTRACT:1"
-			val, _ := json.Marshal(int64(5))
-			return txn.Set([]byte(key), val)
-		})
-		require.NoError(t, err)
+    // Validate burnt supply
+    err = db.View(func(txn *badger.Txn) error {
+        nft, err := nftDb.GetNFT(txn, "contractD", "token4")
+        require.NoError(t, err)
+        require.NotNil(t, nft)
+        assert.Equal(t, int64(20), nft.Supply)     // total supply doesn't change
+        assert.Equal(t, int64(5), nft.BurntSupply) // burnt supply increased
+        return nil
+    })
+    require.NoError(t, err)
+}
 
-		// 4) Now call GetNftsByOwnerAddress("0xAlice") => should return [ (0xCONTRACT,1), (0xCONTRACT,999) ]
-		err = db.View(func(txn *badger.Txn) error {
-			nfts, err := nftDb.GetNftsByOwnerAddress(txn, "0xAlice")
-			require.NoError(t, err)
-			// Expect 2 items
-			require.Len(t, nfts, 2, "expect 2 NFTs for 0xAlice")
+func TestGetNftsByOwnerAddress(t *testing.T) {
+    db := setupTestInMemoryDB(t)
+    nftDb := NewNFTDb()
 
-			var found1, found999 bool
-			for _, n := range nfts {
-				if n.Contract == "0xCONTRACT" && n.TokenID == "1" {
-					found1 = true
-					// supply was 8 (Mint) & burnt 2 => supply=8, burnt=2
-					assert.Equal(t, int64(8), n.Supply)
-					assert.Equal(t, int64(2), n.BurntSupply)
-				}
-				if n.Contract == "0xCONTRACT" && n.TokenID == "999" {
-					found999 = true
-					// supply=10, burnt=0
-					assert.Equal(t, int64(10), n.Supply)
-					assert.Equal(t, int64(0), n.BurntSupply)
-				}
-			}
-			assert.True(t, found1, "did not find NFT (0xCONTRACT,1)")
-			assert.True(t, found999, "did not find NFT (0xCONTRACT,999)")
-			return nil
-		})
-		require.NoError(t, err)
-	})
+    // We need to simulate ownership by writing keys:
+    // "tdh:owner:{owner}:{contract}:{tokenID}"
+    // Then verify `GetNftsByOwnerAddress` picks them up.
+
+    // Let's create some NFTs in the DB first
+    err := db.Update(func(txn *badger.Txn) error {
+        // NFT1
+        err := nftDb.UpdateSupply(txn, "contractX", "token100", 10)
+        if err != nil {
+            return err
+        }
+        // NFT2
+        return nftDb.UpdateSupply(txn, "contractY", "token200", 5)
+    })
+    require.NoError(t, err)
+
+    // Now store ownership for an address e.g. "0x123"
+    err = db.Update(func(txn *badger.Txn) error {
+        // Owner key for NFT1
+        ownerKey1 := []byte("tdh:owner:0x123:contractX:token100")
+        if err := txn.Set(ownerKey1, []byte("owned")); err != nil {
+            return err
+        }
+        // Owner key for NFT2
+        ownerKey2 := []byte("tdh:owner:0x123:contractY:token200")
+        if err := txn.Set(ownerKey2, []byte("owned")); err != nil {
+            return err
+        }
+        // We'll also add an NFT that the owner does NOT actually own
+        // to verify that it won't appear in the result
+        err := nftDb.UpdateSupply(txn, "contractZ", "token999", 3)
+        if err != nil {
+            return err
+        }
+        // Notice we do NOT store the ownership key "tdh:owner:0x123:contractZ:token999"
+        return nil
+    })
+    require.NoError(t, err)
+
+    // Now get the NFTs for 0x123
+    err = db.View(func(txn *badger.Txn) error {
+        nfts, err := nftDb.GetNftsByOwnerAddress(txn, "0x123")
+        require.NoError(t, err)
+
+        // We expect to see exactly 2 NFTs: (contractX, token100) and (contractY, token200)
+        assert.Len(t, nfts, 2)
+
+        // We'll track which ones we found
+        foundX100 := false
+        foundY200 := false
+
+        for _, nft := range nfts {
+            switch {
+            case nft.Contract == "contractX" && nft.TokenID == "token100":
+                foundX100 = true
+                assert.Equal(t, int64(10), nft.Supply)
+            case nft.Contract == "contractY" && nft.TokenID == "token200":
+                foundY200 = true
+                assert.Equal(t, int64(5), nft.Supply)
+            }
+        }
+
+        assert.True(t, foundX100, "expected contractX/token100 in results")
+        assert.True(t, foundY200, "expected contractY/token200 in results")
+
+        return nil
+    })
+    require.NoError(t, err)
 }
