@@ -30,12 +30,13 @@ type TokensTransfersWatcher interface {
 }
 
 type DefaultTokensTransfersWatcher struct {
-	ctx           context.Context
-	client        EthClient
-	decoder       EthTransactionLogsDecoder
-	blockTracker  BlockHashDb
-	salesDetector SalesDetector
-	maxChunkSize  uint64
+	ctx              context.Context
+	client           EthClient
+	decoder          EthTransactionLogsDecoder
+	blockTracker     BlockHashDb
+	salesDetector    SalesDetector
+	maxBlocksInBatch uint64
+	maxLogsInBatch   uint64
 }
 
 func NewTokensTransfersWatcher(db *badger.DB, ctx context.Context) (*DefaultTokensTransfersWatcher, error) {
@@ -43,17 +44,21 @@ func NewTokensTransfersWatcher(db *badger.DB, ctx context.Context) (*DefaultToke
 	if err != nil {
 		return nil, err
 	}
-	maxChunkSize := config.Get().TdhTransferWatcherMaxChunkSize
-	if maxChunkSize == 0 {
-		maxChunkSize = 20000
+	maxBlocksInBatch := config.Get().TdhMaxBlocksInBatch
+	if maxBlocksInBatch == 0 {
+		maxBlocksInBatch = 20000
+	}
+	maxLogsInBatch := config.Get().TdhMaxLogsInBatch
+	if maxLogsInBatch == 0 {
+		maxLogsInBatch = 2000
 	}
 	return &DefaultTokensTransfersWatcher{
-		ctx:           ctx,
-		client:        ethClient,
-		decoder:       NewDefaultEthTransactionLogsDecoder(),
-		blockTracker:  NewBlockHashDb(db),
-		salesDetector: NewDefaultSalesDetector(ethClient),
-		maxChunkSize:  maxChunkSize,
+		ctx:              ctx,
+		client:           ethClient,
+		decoder:          NewDefaultEthTransactionLogsDecoder(),
+		blockTracker:     NewBlockHashDb(db),
+		salesDetector:    NewDefaultSalesDetector(ethClient),
+		maxBlocksInBatch: maxBlocksInBatch,
 	}, nil
 }
 
@@ -86,7 +91,7 @@ func (w *DefaultTokensTransfersWatcher) WatchTransfers(
 		}
 
 		if currentBlock <= tipBlock {
-			endBlock := currentBlock + w.maxChunkSize - 1
+			endBlock := currentBlock + w.maxBlocksInBatch - 1
 			if endBlock > tipBlock {
 				endBlock = tipBlock
 			}
@@ -144,7 +149,7 @@ func (w *DefaultTokensTransfersWatcher) pollForNewBlocks(
 		}
 
 		if *currentBlock <= tipBlock {
-			endBlock := *currentBlock + w.maxChunkSize - 1
+			endBlock := *currentBlock + w.maxBlocksInBatch - 1
 			if endBlock > tipBlock {
 				endBlock = tipBlock
 			}
@@ -194,7 +199,7 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 			}
 			blockNum := header.Number.Uint64()
 			for *currentBlock < blockNum {
-				endBlock := *currentBlock + w.maxChunkSize - 1
+				endBlock := *currentBlock + w.maxBlocksInBatch - 1
 				if endBlock >= blockNum-1 {
 					endBlock = blockNum - 1
 				}
@@ -420,7 +425,6 @@ func (w *DefaultTokensTransfersWatcher) fetchLogsAdaptive(
 	startBlock,
 	endBlock uint64,
 ) ([]types.Log, uint64, error) {
-	const maxLogsThreshold = 2000
 	const minChunkSize = uint64(1)
 
 	for {
@@ -429,7 +433,7 @@ func (w *DefaultTokensTransfersWatcher) fetchLogsAdaptive(
 			return nil, 0, err
 		}
 
-		if len(logs) > maxLogsThreshold && (endBlock-startBlock+1) > minChunkSize {
+		if uint64(len(logs)) > w.maxLogsInBatch && (endBlock-startBlock+1) > minChunkSize {
 			halfRange := (endBlock - startBlock + 1) / 2
 			if halfRange < minChunkSize {
 				halfRange = minChunkSize
