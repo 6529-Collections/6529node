@@ -32,6 +32,7 @@ type TokensTransfersWatcher interface {
 type DefaultTokensTransfersWatcher struct {
 	Decoder      EthTransactionLogsDecoder
 	BlockTracker BlockHashDb
+	SaleDetector SalesDetector
 }
 
 func (w *DefaultTokensTransfersWatcher) WatchTransfers(
@@ -229,7 +230,30 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 	}
 
 	decoded := w.Decoder.Decode(logs)
-	blockGroups := groupLogsByBlock(decoded)
+
+	var allTransfers []tokens.TokenTransfer
+	for _, blockTransfers := range decoded {
+		allTransfers = append(allTransfers, blockTransfers...)
+	}
+
+	txMap := make(map[common.Hash][]*tokens.TokenTransfer)
+	for i := range allTransfers {
+		txHash := common.HexToHash(allTransfers[i].TxHash)
+		txMap[txHash] = append(txMap[txHash], &allTransfers[i])
+	}
+
+	for txHash, xfers := range txMap {
+		resultMap, err := w.SaleDetector.DetectIfSale(ctx, txHash, deref(xfers))
+		if err != nil {
+			zap.L().Error("Sale detection failed", zap.Error(err), zap.String("txHash", txHash.Hex()))
+			continue
+		}
+		for i, tr := range xfers {
+			tr.Type = resultMap[i]
+		}
+	}
+
+	blockGroups := groupLogsByBlock(allTransfers)
 
 	if len(blockGroups) == 0 {
 		latestBlockChan <- endBlock
@@ -295,6 +319,14 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 	return nil
 }
 
+func deref(xfers []*tokens.TokenTransfer) []tokens.TokenTransfer {
+	derefed := make([]tokens.TokenTransfer, len(xfers))
+	for i, xfer := range xfers {
+		derefed[i] = *xfer
+	}
+	return derefed
+}
+
 func (w *DefaultTokensTransfersWatcher) checkAndHandleReorg(
 	ctx context.Context,
 	client EthClient,
@@ -310,7 +342,7 @@ func (w *DefaultTokensTransfersWatcher) checkAndHandleReorg(
 		if startBlock == 0 {
 			break
 		}
-		blockNum := startBlock - 1
+		blockNum := startBlock - 1 - uint64(i)
 		recordedHash, found := w.BlockTracker.GetHash(blockNum)
 		if !found {
 			if blockNum == 0 {
@@ -368,12 +400,10 @@ func fetchLogsInRange(
 	return client.FilterLogs(ctx, query)
 }
 
-func groupLogsByBlock(decoded [][]tokens.TokenTransfer) map[uint64][]tokens.TokenTransfer {
+func groupLogsByBlock(decoded []tokens.TokenTransfer) map[uint64][]tokens.TokenTransfer {
 	groups := make(map[uint64][]tokens.TokenTransfer)
-	for _, batch := range decoded {
-		for _, t := range batch {
-			groups[t.BlockNumber] = append(groups[t.BlockNumber], t)
-		}
+	for _, t := range decoded {
+		groups[t.BlockNumber] = append(groups[t.BlockNumber], t)
 	}
 	return groups
 }

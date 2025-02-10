@@ -81,6 +81,7 @@ func CreateTdhContractsListener(badger *badger.DB) (*TdhContractsListener, error
 		transfersWatcher: &eth.DefaultTokensTransfersWatcher{
 			Decoder:      &eth.DefaultEthTransactionLogsDecoder{},
 			BlockTracker: eth.NewBlockHashDb(badger),
+			SaleDetector: eth.NewDefaultSalesDetector(client),
 		},
 		transfersReceivedAction: &eth.DefaultTdhTransfersReceivedAction{},
 		progressTracker:         eth.NewTdhIdxTrackerDb(badger),
