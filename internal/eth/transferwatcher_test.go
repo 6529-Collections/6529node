@@ -101,6 +101,7 @@ func TestDefaultTokensTransfersWatcher(t *testing.T) {
 	t.Run("TestLargeBlockRange", testLargeBlockRange)
 	t.Run("TestWatchTransfers_SaleDetectionSuccess", testWatchTransfersSaleDetectionSuccess)
 	t.Run("TestWatchTransfers_SaleDetectionError", testWatchTransfersSaleDetectionError)
+	t.Run("TestAdaptiveFetch", testAdaptiveFetch)
 }
 
 func testGroupLogsByBlock(t *testing.T) {
@@ -1097,4 +1098,49 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("WatchTransfers did not stop after context cancel")
 	}
+}
+
+func testAdaptiveFetch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockClient := mocks.NewEthClient(t)
+	blockDb := NewInMemoryBlockHashDb()
+	decoder := NewDefaultEthTransactionLogsDecoder()
+	salesDetector := NewDefaultSalesDetector(mockClient)
+
+	watcher := &DefaultTokensTransfersWatcher{
+		ctx:           ctx,
+		client:        mockClient,
+		decoder:       decoder,
+		blockTracker:  blockDb,
+		salesDetector: salesDetector,
+		maxChunkSize:  100,
+	}
+
+	mockClient.On("FilterLogs", mock.Anything, mock.AnythingOfType("ethereum.FilterQuery")).
+		Return(func(_ context.Context, fq ethereum.FilterQuery) []types.Log {
+			from, to := fq.FromBlock.Uint64(), fq.ToBlock.Uint64()
+			numBlocks := to - from + 1
+			if numBlocks > 5 {
+				overLimitLogs := make([]types.Log, 2100)
+				for i := range overLimitLogs {
+					overLimitLogs[i].BlockNumber = 123
+				}
+				return overLimitLogs
+			}
+			underLimitLogs := make([]types.Log, 100)
+			for i := range underLimitLogs {
+				underLimitLogs[i].BlockNumber = 123
+			}
+			return underLimitLogs
+		}, nil).
+		Maybe()
+
+	logs, finalEndBlock, err := watcher.fetchLogsAdaptive(nil, 100, 200)
+	assert.NoError(t, err, "Adaptive fetch should not error")
+
+	assert.Less(t, finalEndBlock, uint64(200), "Final end block should be reduced from 200")
+
+	assert.LessOrEqual(t, len(logs), 2000, "Logs should end up below the threshold")
 }

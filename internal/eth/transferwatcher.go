@@ -236,7 +236,7 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 		return err
 	}
 
-	logs, err := fetchLogsInRange(w.ctx, w.client, contractAddrs, startBlock, endBlock)
+	logs, newEndBlock, err := w.fetchLogsAdaptive(contractAddrs, startBlock, endBlock)
 	if err != nil {
 		zap.L().Error("Failed fetching logs",
 			zap.Uint64("start", startBlock),
@@ -245,6 +245,8 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 		)
 		return err
 	}
+
+	endBlock = newEndBlock
 
 	decoded := w.decoder.Decode(logs)
 
@@ -401,9 +403,7 @@ func latestBlockNumber(ctx context.Context, client EthClient) (uint64, error) {
 	return header.Number.Uint64(), nil
 }
 
-func fetchLogsInRange(
-	ctx context.Context,
-	client EthClient,
+func (w *DefaultTokensTransfersWatcher) fetchLogsInRange(
 	addresses []common.Address,
 	startBlock, endBlock uint64,
 ) ([]types.Log, error) {
@@ -412,7 +412,37 @@ func fetchLogsInRange(
 		ToBlock:   big.NewInt(int64(endBlock)),
 		Addresses: addresses,
 	}
-	return client.FilterLogs(ctx, query)
+	return w.client.FilterLogs(w.ctx, query)
+}
+
+func (w *DefaultTokensTransfersWatcher) fetchLogsAdaptive(
+	addresses []common.Address,
+	startBlock,
+	endBlock uint64,
+) ([]types.Log, uint64, error) {
+	const maxLogsThreshold = 2000
+	const minChunkSize = uint64(1)
+
+	for {
+		logs, err := w.fetchLogsInRange(addresses, startBlock, endBlock)
+		if err != nil {
+			return nil, 0, err
+		}
+
+		if len(logs) > maxLogsThreshold && (endBlock-startBlock+1) > minChunkSize {
+			halfRange := (endBlock - startBlock + 1) / 2
+			if halfRange < minChunkSize {
+				halfRange = minChunkSize
+			}
+			endBlock = startBlock + halfRange - 1
+			if endBlock < startBlock {
+				endBlock = startBlock
+			}
+			continue
+		}
+
+		return logs, endBlock, nil
+	}
 }
 
 func groupLogsByBlock(decoded []tokens.TokenTransfer) map[uint64][]tokens.TokenTransfer {
