@@ -17,19 +17,16 @@ var (
 )
 
 type TdhContractsListener struct {
-	ethClient               eth.EthClient
 	transfersWatcher        eth.TokensTransfersWatcher
 	transfersReceivedAction eth.TdhTransfersReceivedAction
 	progressTracker         eth.TdhIdxTrackerDb
 }
 
-func (client TdhContractsListener) Listen(
-	ctx context.Context,
-) error {
+func (client TdhContractsListener) Listen() error {
 	nftActionsChan := make(chan []tokens.TokenTransfer)
 	go func() {
 		for batch := range nftActionsChan {
-			err := client.transfersReceivedAction.Handle(ctx, batch)
+			err := client.transfersReceivedAction.Handle(batch)
 			if err != nil {
 				zap.L().Error("Error handling transfers", zap.Error(err))
 			}
@@ -55,8 +52,7 @@ func (client TdhContractsListener) Listen(
 		}
 	}()
 	return client.transfersWatcher.WatchTransfers(
-		ctx,
-		client.ethClient, []string{
+		[]string{
 			MEMES_CONTRACT,
 			GRADIENTS_CONTRACT,
 			NEXTGEN_CONTRACT,
@@ -67,23 +63,14 @@ func (client TdhContractsListener) Listen(
 	)
 }
 
-func (client TdhContractsListener) Close() {
-	client.ethClient.Close()
-}
-
-func CreateTdhContractsListener(badger *badger.DB) (*TdhContractsListener, error) {
-	client, err := eth.CreateEthClient()
+func CreateTdhContractsListener(badger *badger.DB, ctx context.Context) (*TdhContractsListener, error) {
+	transfersWatcher, err := eth.NewTokensTransfersWatcher(badger, ctx)
 	if err != nil {
 		return nil, err
 	}
 	return &TdhContractsListener{
-		ethClient: client,
-		transfersWatcher: &eth.DefaultTokensTransfersWatcher{
-			Decoder:      &eth.DefaultEthTransactionLogsDecoder{},
-			BlockTracker: eth.NewBlockHashDb(badger),
-			SaleDetector: eth.NewDefaultSalesDetector(client),
-		},
-		transfersReceivedAction: &eth.DefaultTdhTransfersReceivedAction{},
+		transfersWatcher:        transfersWatcher,
+		transfersReceivedAction: eth.NewDefaultTdhTransfersReceivedAction(ctx),
 		progressTracker:         eth.NewTdhIdxTrackerDb(badger),
 	}, nil
 }

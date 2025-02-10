@@ -55,6 +55,10 @@ type EthTransactionLogsDecoder interface {
 type DefaultEthTransactionLogsDecoder struct {
 }
 
+func NewDefaultEthTransactionLogsDecoder() *DefaultEthTransactionLogsDecoder {
+	return &DefaultEthTransactionLogsDecoder{}
+}
+
 func (d *DefaultEthTransactionLogsDecoder) Decode(allLogs []types.Log) [][]tokens.TokenTransfer {
 	blocks := map[uint64][]tokens.TokenTransfer{}
 	for _, lg := range allLogs {
