@@ -140,6 +140,8 @@ func testWatchTransfersSimplePolling(t *testing.T) {
 		Return(nil, errors.New("no wss support")).
 		Maybe()
 
+	mockClient.On("Close").Return(nil).Once()
+
 	headerAt12 := makeHeader(12, makeHash(0x12))
 	mockClient.On("HeaderByNumber", mock.Anything, (*big.Int)(nil)).
 		Return(headerAt12, nil).
@@ -164,7 +166,6 @@ func testWatchTransfersSimplePolling(t *testing.T) {
 		Return([][]tokens.TokenTransfer{{t10, t12}}).
 		Maybe()
 
-	// For simplicity, we can have the SaleDetector return an empty classification for each TX
 	mockSalesDetector.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
 		Return(map[int]tokens.TransferType{
 			0: tokens.SEND,
@@ -193,7 +194,9 @@ func testWatchTransfersSimplePolling(t *testing.T) {
 		err := watcher.WatchTransfers(
 			[]string{"0xABCDEF"},
 			10,
-			transfersChan, latestBlockChan,
+			transfersChan,
+			latestBlockChan,
+			make(chan bool, 10),
 		)
 		assert.NoError(t, err)
 		close(doneCh)
@@ -255,7 +258,7 @@ func testWatchTransfersSubscription(t *testing.T) {
 	block51Hash := block51.Hash()
 
 	block52 := makeRealisticHeader(52, block51Hash)
-
+	mockClient.On("Close").Return(nil).Once()
 	mockClient.On("HeaderByNumber", mock.Anything, (*big.Int)(nil)).
 		Return(block50, nil).
 		Maybe()
@@ -356,6 +359,7 @@ func testWatchTransfersSubscription(t *testing.T) {
 			startBlock,
 			transfersChan,
 			latestBlockChan,
+			make(chan<- bool, 10),
 		)
 		doneCh <- err
 	}()
@@ -519,7 +523,7 @@ func testPollingErrorAndRecovery(t *testing.T) {
 		ctx:           ctx,
 		maxChunkSize:  20000,
 	}
-
+	mockClient.On("Close").Return(nil).Once()
 	mockClient.On("SubscribeNewHead", mock.Anything, mock.Anything).
 		Return(nil, errors.New("no subscription")).
 		Once()
@@ -588,6 +592,7 @@ func testPollingErrorAndRecovery(t *testing.T) {
 			1,
 			transfersChan,
 			latestBlockChan,
+			make(chan<- bool, 10),
 		)
 		doneCh <- err
 	}()
@@ -646,6 +651,7 @@ func testCancelContextMidway(t *testing.T) {
 		maxChunkSize:  20000,
 	}
 
+	mockClient.On("Close").Return(nil).Once()
 	mockClient.On("HeaderByNumber", mock.Anything, mock.AnythingOfType("*big.Int")).
 		Return(makeHeader(100, makeHash(0x64)), nil).
 		Maybe()
@@ -684,6 +690,7 @@ func testCancelContextMidway(t *testing.T) {
 			1,
 			transfersChan,
 			latestBlockChan,
+			make(chan<- bool, 10),
 		)
 		doneCh <- err
 	}()
@@ -720,6 +727,7 @@ func testLargeBlockRange(t *testing.T) {
 	}
 
 	headerAt5000 := makeHeader(5000, makeHash(0x88))
+	mockClient.On("Close").Return(nil).Once()
 	mockClient.On("HeaderByNumber", mock.Anything, (*big.Int)(nil)).
 		Return(headerAt5000, nil).
 		Times(3)
@@ -782,6 +790,7 @@ func testLargeBlockRange(t *testing.T) {
 			1,
 			transfersChan,
 			latestBlockChan,
+			make(chan<- bool, 10),
 		)
 		doneCh <- err
 	}()
@@ -832,6 +841,7 @@ func testWatchTransfersSaleDetectionSuccess(t *testing.T) {
 	}
 
 	headerAt200 := makeHeader(200, makeHash(0xAA))
+	mockClient.On("Close").Return(nil).Once()
 	mockClient.
 		On("HeaderByNumber", mock.Anything, (*big.Int)(nil)).
 		Return(headerAt200, nil).
@@ -930,6 +940,7 @@ func testWatchTransfersSaleDetectionSuccess(t *testing.T) {
 			100,
 			transfersChan,
 			latestBlockChan,
+			make(chan<- bool, 10),
 		)
 		doneCh <- err
 	}()
@@ -983,6 +994,7 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 	}
 
 	headerAt300 := makeHeader(300, makeHash(0x33))
+	mockClient.On("Close").Return(nil).Once()
 	mockClient.
 		On("HeaderByNumber", mock.Anything, (*big.Int)(nil)).
 		Return(headerAt300, nil).
@@ -1053,6 +1065,7 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 			200,
 			transfersChan,
 			latestBlockChan,
+			make(chan<- bool, 10),
 		)
 		doneCh <- err
 	}()

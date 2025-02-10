@@ -32,12 +32,12 @@ func TestTdhContractsListener_Listen_ProgressGreaterThanEpochBlock(t *testing.T)
 			expectedStartBlock,
 			mock.Anything,
 			mock.Anything,
+			mock.Anything,
 		).
 		Return(nil).
 		Run(func(args mock.Arguments) {
 			nftChan := args.Get(2).(chan<- []tokens.TokenTransfer)
 			lbChan := args.Get(3).(chan<- uint64)
-
 			lbChan <- 13360878
 			nftChan <- []tokens.TokenTransfer{
 				{From: "0x111", To: "0x222"},
@@ -58,7 +58,7 @@ func TestTdhContractsListener_Listen_ProgressGreaterThanEpochBlock(t *testing.T)
 		progressTracker:         mIdxTracker,
 	}
 
-	err := listener.Listen()
+	err := listener.listen(make(chan bool))
 	assert.NoError(t, err)
 
 	time.Sleep(50 * time.Millisecond)
@@ -87,6 +87,7 @@ func TestTdhContractsListener_Listen_ProgressLessThanEpochBlock(t *testing.T) {
 			TDH_CONTRACTS_EPOCH_BLOCK,
 			mock.Anything,
 			mock.Anything,
+			mock.Anything,
 		).
 		Return(nil).
 		Run(func(args mock.Arguments) {
@@ -102,7 +103,7 @@ func TestTdhContractsListener_Listen_ProgressLessThanEpochBlock(t *testing.T) {
 		progressTracker:         mIdxTracker,
 	}
 
-	err := listener.Listen()
+	err := listener.listen(make(chan bool))
 	assert.NoError(t, err)
 
 	time.Sleep(50 * time.Millisecond)
@@ -127,11 +128,11 @@ func TestTdhContractsListener_Listen_ErrorOnGetProgress(t *testing.T) {
 		progressTracker:         mIdxTracker,
 	}
 
-	err := listener.Listen()
+	err := listener.listen(make(chan bool))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get progress")
 
-	mTransfersWatcher.AssertNotCalled(t, "WatchTransfers", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mTransfersWatcher.AssertNotCalled(t, "WatchTransfers", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	mIdxTracker.AssertExpectations(t)
 	mTransfersAction.AssertExpectations(t)
@@ -153,6 +154,7 @@ func TestTdhContractsListener_Listen_ErrorOnWatchTransfers(t *testing.T) {
 			uint64(13360860),
 			mock.Anything,
 			mock.Anything,
+			mock.Anything,
 		).
 		Return(errors.New("watch transfers failed")).
 		Once()
@@ -162,7 +164,7 @@ func TestTdhContractsListener_Listen_ErrorOnWatchTransfers(t *testing.T) {
 		progressTracker:         mIdxTracker,
 	}
 
-	err := listener.Listen()
+	err := listener.listen(make(chan bool))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "watch transfers failed")
 
@@ -186,6 +188,7 @@ func TestTdhContractsListener_Listen_HandleErrorDoesNotStopLoop(t *testing.T) {
 		On("WatchTransfers",
 			mock.Anything,
 			uint64(13360860),
+			mock.Anything,
 			mock.Anything,
 			mock.Anything,
 		).
@@ -213,7 +216,7 @@ func TestTdhContractsListener_Listen_HandleErrorDoesNotStopLoop(t *testing.T) {
 		progressTracker:         mIdxTracker,
 	}
 
-	err := listener.Listen()
+	err := listener.listen(make(chan bool))
 	assert.NoError(t, err, "Listen should not immediately fail")
 
 	time.Sleep(100 * time.Millisecond)

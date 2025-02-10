@@ -12,17 +12,17 @@ type TokensTransfersWatcher struct {
 	mock.Mock
 }
 
-// WatchTransfers provides a mock function with given fields: contracts, startBlock, transfersChan, latestBlockChan
-func (_m *TokensTransfersWatcher) WatchTransfers(contracts []string, startBlock uint64, transfersChan chan<- []tokens.TokenTransfer, latestBlockChan chan<- uint64) error {
-	ret := _m.Called(contracts, startBlock, transfersChan, latestBlockChan)
+// WatchTransfers provides a mock function with given fields: contracts, startBlock, transfersChan, latestBlockChan, tipReachedChan
+func (_m *TokensTransfersWatcher) WatchTransfers(contracts []string, startBlock uint64, transfersChan chan<- []tokens.TokenTransfer, latestBlockChan chan<- uint64, tipReachedChan chan<- bool) error {
+	ret := _m.Called(contracts, startBlock, transfersChan, latestBlockChan, tipReachedChan)
 
 	if len(ret) == 0 {
 		panic("no return value specified for WatchTransfers")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func([]string, uint64, chan<- []tokens.TokenTransfer, chan<- uint64) error); ok {
-		r0 = rf(contracts, startBlock, transfersChan, latestBlockChan)
+	if rf, ok := ret.Get(0).(func([]string, uint64, chan<- []tokens.TokenTransfer, chan<- uint64, chan<- bool) error); ok {
+		r0 = rf(contracts, startBlock, transfersChan, latestBlockChan, tipReachedChan)
 	} else {
 		r0 = ret.Error(0)
 	}
