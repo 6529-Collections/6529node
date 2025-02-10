@@ -59,6 +59,7 @@ func NewTokensTransfersWatcher(db *badger.DB, ctx context.Context) (*DefaultToke
 		blockTracker:     NewBlockHashDb(db),
 		salesDetector:    NewDefaultSalesDetector(ethClient),
 		maxBlocksInBatch: maxBlocksInBatch,
+		maxLogsInBatch:   maxLogsInBatch,
 	}, nil
 }
 
