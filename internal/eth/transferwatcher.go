@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/6529-Collections/6529node/internal/config"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/ethereum/go-ethereum"
@@ -14,8 +15,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"go.uber.org/zap"
 )
-
-var maxChunkSize = uint64(20000)
 
 var ErrReorgDetected = errors.New("reorg detected")
 
@@ -34,6 +33,7 @@ type DefaultTokensTransfersWatcher struct {
 	decoder       EthTransactionLogsDecoder
 	blockTracker  BlockHashDb
 	salesDetector SalesDetector
+	maxChunkSize  uint64
 }
 
 func NewTokensTransfersWatcher(db *badger.DB, ctx context.Context) (*DefaultTokensTransfersWatcher, error) {
@@ -41,12 +41,17 @@ func NewTokensTransfersWatcher(db *badger.DB, ctx context.Context) (*DefaultToke
 	if err != nil {
 		return nil, err
 	}
+	maxChunkSize := config.Get().TdhTransferWatcherMaxChunkSize
+	if maxChunkSize == 0 {
+		maxChunkSize = 20000
+	}
 	return &DefaultTokensTransfersWatcher{
 		ctx:           ctx,
 		client:        ethClient,
 		decoder:       NewDefaultEthTransactionLogsDecoder(),
 		blockTracker:  NewBlockHashDb(db),
 		salesDetector: NewDefaultSalesDetector(ethClient),
+		maxChunkSize:  maxChunkSize,
 	}, nil
 }
 
@@ -77,7 +82,7 @@ func (w *DefaultTokensTransfersWatcher) WatchTransfers(
 		}
 
 		if currentBlock <= tipBlock {
-			endBlock := currentBlock + maxChunkSize - 1
+			endBlock := currentBlock + w.maxChunkSize - 1
 			if endBlock > tipBlock {
 				endBlock = tipBlock
 			}
@@ -132,7 +137,7 @@ func (w *DefaultTokensTransfersWatcher) pollForNewBlocks(
 		}
 
 		if *currentBlock <= tipBlock {
-			endBlock := *currentBlock + maxChunkSize - 1
+			endBlock := *currentBlock + w.maxChunkSize - 1
 			if endBlock > tipBlock {
 				endBlock = tipBlock
 			}
@@ -182,7 +187,7 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 			}
 			blockNum := header.Number.Uint64()
 			for *currentBlock < blockNum {
-				endBlock := *currentBlock + maxChunkSize - 1
+				endBlock := *currentBlock + w.maxChunkSize - 1
 				if endBlock >= blockNum-1 {
 					endBlock = blockNum - 1
 				}

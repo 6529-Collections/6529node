@@ -133,6 +133,7 @@ func testWatchTransfersSimplePolling(t *testing.T) {
 		salesDetector: mockSalesDetector,
 		client:        mockClient,
 		ctx:           ctx,
+		maxChunkSize:  20000,
 	}
 
 	mockClient.On("SubscribeNewHead", mock.Anything, mock.Anything).
@@ -243,6 +244,7 @@ func testWatchTransfersSubscription(t *testing.T) {
 		salesDetector: mockSalesDetector,
 		client:        mockClient,
 		ctx:           ctx,
+		maxChunkSize:  20000,
 	}
 
 	startBlock := uint64(50)
@@ -411,6 +413,7 @@ func testReorgDetected(t *testing.T) {
 		salesDetector: mockSales,
 		client:        mockClient,
 		ctx:           ctx,
+		maxChunkSize:  20000,
 	}
 
 	safeHash := makeHash(0xFA)
@@ -461,6 +464,7 @@ func testReorgDuringCheckAndHandle(t *testing.T) {
 		salesDetector: mockSales,
 		client:        mockClient,
 		ctx:           ctx,
+		maxChunkSize:  20000,
 	}
 
 	safeHash := makeHash(0x77)
@@ -513,6 +517,7 @@ func testPollingErrorAndRecovery(t *testing.T) {
 		salesDetector: mockSales,
 		client:        mockClient,
 		ctx:           ctx,
+		maxChunkSize:  20000,
 	}
 
 	mockClient.On("SubscribeNewHead", mock.Anything, mock.Anything).
@@ -638,6 +643,7 @@ func testCancelContextMidway(t *testing.T) {
 		salesDetector: mockSales,
 		client:        mockClient,
 		ctx:           ctx,
+		maxChunkSize:  20000,
 	}
 
 	mockClient.On("HeaderByNumber", mock.Anything, mock.AnythingOfType("*big.Int")).
@@ -699,10 +705,6 @@ func testLargeBlockRange(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	originalSize := maxChunkSize
-	maxChunkSize = 2000
-	defer func() { maxChunkSize = originalSize }()
-
 	mockClient := mocks.NewEthClient(t)
 	mockBlockDb := mocks.NewBlockHashDb(t)
 	mockDecoder := mocks.NewEthTransactionLogsDecoder(t)
@@ -714,6 +716,7 @@ func testLargeBlockRange(t *testing.T) {
 		salesDetector: mockSales,
 		client:        mockClient,
 		ctx:           ctx,
+		maxChunkSize:  2000,
 	}
 
 	headerAt5000 := makeHeader(5000, makeHash(0x88))
@@ -825,6 +828,7 @@ func testWatchTransfersSaleDetectionSuccess(t *testing.T) {
 		salesDetector: mockSales,
 		client:        mockClient,
 		ctx:           ctx,
+		maxChunkSize:  20000,
 	}
 
 	headerAt200 := makeHeader(200, makeHash(0xAA))
@@ -975,6 +979,7 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 		salesDetector: mockSales,
 		client:        mockClient,
 		ctx:           ctx,
+		maxChunkSize:  20000,
 	}
 
 	headerAt300 := makeHeader(300, makeHash(0x33))
