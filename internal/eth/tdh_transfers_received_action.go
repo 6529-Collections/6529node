@@ -14,7 +14,7 @@ import (
 )
 
 type TdhTransfersReceivedAction interface {
-	Handle(ctx context.Context, transfers []tokens.TokenTransfer) error
+	Handle(transfers []tokens.TokenTransfer) error
 }
 
 var ErrResetRequired = errors.New("reset required due to out-of-order checkpoint")
@@ -39,14 +39,16 @@ type DefaultTdhTransfersReceivedAction struct {
 	transferDb TransferDb
 	ownerDb    OwnerDb
 	nftDb      NFTDb
+	ctx        context.Context
 }
 
-func NewTdhTransfersReceivedActionImpl(db *badger.DB) *DefaultTdhTransfersReceivedAction {
+func NewTdhTransfersReceivedActionImpl(db *badger.DB, ctx context.Context) *DefaultTdhTransfersReceivedAction {
 	return &DefaultTdhTransfersReceivedAction{
 		db:         db,
 		transferDb: NewTransferDb(),
 		ownerDb:    NewOwnerDb(),
 		nftDb:      NewNFTDb(),
+		ctx:        ctx,
 	}
 }
 
@@ -224,7 +226,7 @@ func (a *DefaultTdhTransfersReceivedAction) reset(blockNumber uint64, txIndex ui
 	return nil
 }
 
-func (a *DefaultTdhTransfersReceivedAction) Handle(ctx context.Context, transfers []tokens.TokenTransfer) error {
+func (a *DefaultTdhTransfersReceivedAction) Handle(transfers []tokens.TokenTransfer) error {
 	zap.L().Info("Processing transfers received action", zap.Int("transfers", len(transfers)))
 
 	const batchSize = 100
@@ -312,7 +314,7 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(ctx context.Context, transfer
 			if errors.Is(err, ErrResetRequired) {
 				zap.L().Warn("Resetting due to checkpoint mismatch")
 				a.reset(firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex)
-				return a.Handle(ctx, transfers) // Restart from scratch
+				return a.Handle(transfers) // Restart from scratch
 			}
 			return err
 		}

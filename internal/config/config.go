@@ -11,9 +11,10 @@ import (
 )
 
 type Config struct {
-	LogZapMode               string `mapstructure:"LOG_ZAP_MODE"`
-	PrintConfigurationToLogs string `mapstructure:"PRINT_CONFIGURATION_TO_LOGS"`
-	EthereumNodeUrl          string `mapstructure:"ETHEREUM_NODE_URL"`
+	LogZapMode                     string `mapstructure:"LOG_ZAP_MODE"`
+	PrintConfigurationToLogs       string `mapstructure:"PRINT_CONFIGURATION_TO_LOGS"`
+	EthereumNodeUrl                string `mapstructure:"ETHEREUM_NODE_URL"`
+	TdhTransferWatcherMaxChunkSize uint64 `mapstructure:"TDH_TRANSFER_WATCHER_MAX_CHUNK_SIZE"`
 }
 
 var lock = &sync.Mutex{}

@@ -14,10 +14,10 @@ import (
 
 func TestDefaultTdhTransfersReceivedAction_NoTransfers(t *testing.T) {
     db := setupTestInMemoryDB(t)
-    orchestrator := NewTdhTransfersReceivedActionImpl(db)
+    orchestrator := NewTdhTransfersReceivedActionImpl(db, context.Background())
 
     // Test calling Handle with no transfers
-    err := orchestrator.Handle(context.Background(), []tokens.TokenTransfer{})
+    err := orchestrator.Handle([]tokens.TokenTransfer{})
     require.NoError(t, err)
 
     // Expect no changes, no errors, just a no-op
@@ -35,7 +35,7 @@ func TestDefaultTdhTransfersReceivedAction_NoTransfers(t *testing.T) {
 
 func TestDefaultTdhTransfersReceivedAction_BasicFlow(t *testing.T) {
     db := setupTestInMemoryDB(t)
-    orchestrator := NewTdhTransfersReceivedActionImpl(db)
+    orchestrator := NewTdhTransfersReceivedActionImpl(db, context.Background())
 
     // Some sample transfers
     // 1) Mint 3 tokens, block=1
@@ -80,7 +80,7 @@ func TestDefaultTdhTransfersReceivedAction_BasicFlow(t *testing.T) {
         },
     }
 
-    err := orchestrator.Handle(context.Background(), transfers)
+    err := orchestrator.Handle(transfers)
     require.NoError(t, err)
 
     // Check final states (ownerDb, nftDb, checkpoint)
@@ -118,7 +118,7 @@ func TestDefaultTdhTransfersReceivedAction_BasicFlow(t *testing.T) {
 
 func TestDefaultTdhTransfersReceivedAction_OutOfOrderReset(t *testing.T) {
     db := setupTestInMemoryDB(t)
-    orchestrator := NewTdhTransfersReceivedActionImpl(db)
+    orchestrator := NewTdhTransfersReceivedActionImpl(db, context.Background())
 
     // We'll handle a first batch
     batch1 := []tokens.TokenTransfer{
@@ -135,7 +135,7 @@ func TestDefaultTdhTransfersReceivedAction_OutOfOrderReset(t *testing.T) {
         },
     }
     // This sets checkpoint to "10:0:0"
-    require.NoError(t, orchestrator.Handle(context.Background(), batch1))
+    require.NoError(t, orchestrator.Handle(batch1))
 
     // Next we handle a second batch that is "behind" => block=9 => triggers reset
     batch2 := []tokens.TokenTransfer{
@@ -158,7 +158,7 @@ func TestDefaultTdhTransfersReceivedAction_OutOfOrderReset(t *testing.T) {
     // => The reset logic calls .Handle() again with all transfers we just tried to handle, so
     // => it replays from scratch.
 
-    err := orchestrator.Handle(context.Background(), batch2)
+    err := orchestrator.Handle(batch2)
     require.NoError(t, err)
 
     // After handle completes, let's see what ended up in the DB.
@@ -193,7 +193,7 @@ func TestDefaultTdhTransfersReceivedAction_OutOfOrderReset(t *testing.T) {
 
 func TestDefaultTdhTransfersReceivedAction_BurnScenario(t *testing.T) {
     db := setupTestInMemoryDB(t)
-    orchestrator := NewTdhTransfersReceivedActionImpl(db)
+    orchestrator := NewTdhTransfersReceivedActionImpl(db, context.Background())
 
     // 1) Mint 5 tokens to userC
     // 2) userC burns 2 tokens => supply remains 5, burnt=2
@@ -234,7 +234,7 @@ func TestDefaultTdhTransfersReceivedAction_BurnScenario(t *testing.T) {
         },
     }
 
-    require.NoError(t, orchestrator.Handle(context.Background(), allTransfers))
+    require.NoError(t, orchestrator.Handle(allTransfers))
 
     // Check final state
     err := db.View(func(txn *badger.Txn) error {

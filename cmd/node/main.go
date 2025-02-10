@@ -36,13 +36,12 @@ func main() {
     ctx, cancel := context.WithCancel(context.Background())
 
     // Set up the contract listener
-    contractListener, err := tdh.CreateTdhContractsListener(badgerDB)
-    if err != nil {
-        zap.L().Error("Failed to create Ethereum client", zap.Error(err))
+    contractListener, err := tdh.CreateTdhContractsListener(badgerDB, ctx)
+	if err != nil {
+		zap.L().Error("Failed to create Ethereum client", zap.Error(err))
         cancel()
-        _ = badgerDB.Close()
-        return
-    }
+		return
+	}
 
     // Channel to catch OS signals
     stop := make(chan os.Signal, 1)
@@ -55,7 +54,7 @@ func main() {
     go func() {
         defer close(done)
         // If Listen() is blocking, it will exit when `ctx` is canceled (or on error).
-        if err := contractListener.Listen(ctx); err != nil {
+        if err := contractListener.Listen(); err != nil {
             zap.L().Error("Failed to watch contract events", zap.Error(err))
         }
     }()
@@ -71,7 +70,6 @@ func main() {
     <-done
 
     // 3) Now we can safely close everything
-    contractListener.Close()
     _ = badgerDB.Close()
 
     zap.L().Info("Shutdown complete")

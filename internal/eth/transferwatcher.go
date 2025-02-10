@@ -7,21 +7,19 @@ import (
 	"sort"
 	"time"
 
+	"github.com/6529-Collections/6529node/internal/config"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
+	"github.com/dgraph-io/badger/v4"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"go.uber.org/zap"
 )
 
-var maxChunkSize = uint64(20000)
-
 var ErrReorgDetected = errors.New("reorg detected")
 
 type TokensTransfersWatcher interface {
 	WatchTransfers(
-		ctx context.Context,
-		client EthClient,
 		contracts []string,
 		startBlock uint64,
 		transfersChan chan<- []tokens.TokenTransfer,
@@ -30,13 +28,34 @@ type TokensTransfersWatcher interface {
 }
 
 type DefaultTokensTransfersWatcher struct {
-	Decoder      EthTransactionLogsDecoder
-	BlockTracker BlockHashDb
+	ctx           context.Context
+	client        EthClient
+	decoder       EthTransactionLogsDecoder
+	blockTracker  BlockHashDb
+	salesDetector SalesDetector
+	maxChunkSize  uint64
+}
+
+func NewTokensTransfersWatcher(db *badger.DB, ctx context.Context) (*DefaultTokensTransfersWatcher, error) {
+	ethClient, err := CreateEthClient()
+	if err != nil {
+		return nil, err
+	}
+	maxChunkSize := config.Get().TdhTransferWatcherMaxChunkSize
+	if maxChunkSize == 0 {
+		maxChunkSize = 20000
+	}
+	return &DefaultTokensTransfersWatcher{
+		ctx:           ctx,
+		client:        ethClient,
+		decoder:       NewDefaultEthTransactionLogsDecoder(),
+		blockTracker:  NewBlockHashDb(db),
+		salesDetector: NewDefaultSalesDetector(ethClient),
+		maxChunkSize:  maxChunkSize,
+	}, nil
 }
 
 func (w *DefaultTokensTransfersWatcher) WatchTransfers(
-	ctx context.Context,
-	client EthClient,
 	contracts []string,
 	startBlock uint64,
 	transfersChan chan<- []tokens.TokenTransfer,
@@ -54,22 +73,20 @@ func (w *DefaultTokensTransfersWatcher) WatchTransfers(
 
 	currentBlock := startBlock
 	for {
-		tipBlock, err := latestBlockNumber(ctx, client)
+		tipBlock, err := latestBlockNumber(w.ctx, w.client)
 		if err != nil {
-			if sleepInterrupted(ctx, 1*time.Second) {
+			if sleepInterrupted(w.ctx, 1*time.Second) {
 				return nil
 			}
 			continue
 		}
 
 		if currentBlock <= tipBlock {
-			endBlock := currentBlock + maxChunkSize - 1
+			endBlock := currentBlock + w.maxChunkSize - 1
 			if endBlock > tipBlock {
 				endBlock = tipBlock
 			}
 			err = w.processRangeWithPartialReorg(
-				ctx,
-				client,
 				contractAddrs,
 				currentBlock,
 				endBlock,
@@ -81,7 +98,7 @@ func (w *DefaultTokensTransfersWatcher) WatchTransfers(
 					continue
 				}
 				zap.L().Warn("Failed processing blocks range", zap.Error(err))
-				if sleepInterrupted(ctx, 1*time.Second) {
+				if sleepInterrupted(w.ctx, 1*time.Second) {
 					return err
 				}
 				continue
@@ -91,48 +108,46 @@ func (w *DefaultTokensTransfersWatcher) WatchTransfers(
 		}
 
 		newHeads := make(chan *types.Header, 16)
-		sub, err := client.SubscribeNewHead(ctx, newHeads)
+		sub, err := w.client.SubscribeNewHead(w.ctx, newHeads)
 		if err != nil {
 			zap.L().Warn("Falling back to polling", zap.Error(err))
-			return w.pollForNewBlocks(ctx, client, contractAddrs, &currentBlock, transfersChan, latestBlockChan)
+			return w.pollForNewBlocks(contractAddrs, &currentBlock, transfersChan, latestBlockChan)
 		}
-		return w.subscribeAndProcessHeads(ctx, sub, newHeads, client, contractAddrs, &currentBlock, transfersChan, latestBlockChan)
+		return w.subscribeAndProcessHeads(sub, newHeads, contractAddrs, &currentBlock, transfersChan, latestBlockChan)
 	}
 }
 
 func (w *DefaultTokensTransfersWatcher) pollForNewBlocks(
-	ctx context.Context,
-	client EthClient,
 	contractAddrs []common.Address,
 	currentBlock *uint64,
 	transfersChan chan<- []tokens.TokenTransfer,
 	latestBlockChan chan<- uint64,
 ) error {
 	for {
-		if ctx.Err() != nil {
+		if w.ctx.Err() != nil {
 			return nil
 		}
-		tipBlock, err := latestBlockNumber(ctx, client)
+		tipBlock, err := latestBlockNumber(w.ctx, w.client)
 		if err != nil {
 			zap.L().Error("Could not get latest block (polling)", zap.Error(err))
-			if sleepInterrupted(ctx, 3*time.Second) {
+			if sleepInterrupted(w.ctx, 3*time.Second) {
 				return nil
 			}
 			continue
 		}
 
 		if *currentBlock <= tipBlock {
-			endBlock := *currentBlock + maxChunkSize - 1
+			endBlock := *currentBlock + w.maxChunkSize - 1
 			if endBlock > tipBlock {
 				endBlock = tipBlock
 			}
-			err := w.processRangeWithPartialReorg(ctx, client, contractAddrs, *currentBlock, endBlock, transfersChan, latestBlockChan)
+			err := w.processRangeWithPartialReorg(contractAddrs, *currentBlock, endBlock, transfersChan, latestBlockChan)
 			if err != nil {
 				if errors.Is(err, ErrReorgDetected) {
 					continue
 				}
 				zap.L().Error("Failed processing blocks range (polling)", zap.Error(err))
-				if sleepInterrupted(ctx, 3*time.Second) {
+				if sleepInterrupted(w.ctx, 3*time.Second) {
 					return nil
 				}
 				continue
@@ -145,17 +160,15 @@ func (w *DefaultTokensTransfersWatcher) pollForNewBlocks(
 			zap.Uint64("current", *currentBlock),
 			zap.Uint64("tip", tipBlock),
 		)
-		if sleepInterrupted(ctx, 100*time.Millisecond) {
+		if sleepInterrupted(w.ctx, 100*time.Millisecond) {
 			return nil
 		}
 	}
 }
 
 func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
-	ctx context.Context,
 	sub ethereum.Subscription,
 	newHeads <-chan *types.Header,
-	client EthClient,
 	contractAddrs []common.Address,
 	currentBlock *uint64,
 	transfersChan chan<- []tokens.TokenTransfer,
@@ -174,11 +187,11 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 			}
 			blockNum := header.Number.Uint64()
 			for *currentBlock < blockNum {
-				endBlock := *currentBlock + maxChunkSize - 1
+				endBlock := *currentBlock + w.maxChunkSize - 1
 				if endBlock >= blockNum-1 {
 					endBlock = blockNum - 1
 				}
-				err := w.processRangeWithPartialReorg(ctx, client, contractAddrs, *currentBlock, endBlock, transfersChan, latestBlockChan)
+				err := w.processRangeWithPartialReorg(contractAddrs, *currentBlock, endBlock, transfersChan, latestBlockChan)
 				if err != nil {
 					if errors.Is(err, ErrReorgDetected) {
 						continue
@@ -190,7 +203,7 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 			}
 
 			if blockNum >= *currentBlock {
-				err := w.processRangeWithPartialReorg(ctx, client, contractAddrs, blockNum, blockNum, transfersChan, latestBlockChan)
+				err := w.processRangeWithPartialReorg(contractAddrs, blockNum, blockNum, transfersChan, latestBlockChan)
 				if err != nil {
 					if errors.Is(err, ErrReorgDetected) {
 						continue
@@ -200,25 +213,23 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 				*currentBlock = blockNum + 1
 			}
 
-		case <-ctx.Done():
+		case <-w.ctx.Done():
 			return nil
 		}
 	}
 }
 
 func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
-	ctx context.Context,
-	client EthClient,
 	contractAddrs []common.Address,
 	startBlock, endBlock uint64,
 	transfersChan chan<- []tokens.TokenTransfer,
 	latestBlockChan chan<- uint64,
 ) error {
-	if err := w.checkAndHandleReorg(ctx, client, startBlock); err != nil {
+	if err := w.checkAndHandleReorg(startBlock); err != nil {
 		return err
 	}
 
-	logs, err := fetchLogsInRange(ctx, client, contractAddrs, startBlock, endBlock)
+	logs, err := fetchLogsInRange(w.ctx, w.client, contractAddrs, startBlock, endBlock)
 	if err != nil {
 		zap.L().Error("Failed fetching logs",
 			zap.Uint64("start", startBlock),
@@ -228,8 +239,31 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 		return err
 	}
 
-	decoded := w.Decoder.Decode(logs)
-	blockGroups := groupLogsByBlock(decoded)
+	decoded := w.decoder.Decode(logs)
+
+	var allTransfers []tokens.TokenTransfer
+	for _, blockTransfers := range decoded {
+		allTransfers = append(allTransfers, blockTransfers...)
+	}
+
+	txMap := make(map[common.Hash][]*tokens.TokenTransfer)
+	for i := range allTransfers {
+		txHash := common.HexToHash(allTransfers[i].TxHash)
+		txMap[txHash] = append(txMap[txHash], &allTransfers[i])
+	}
+
+	for txHash, xfers := range txMap {
+		resultMap, err := w.salesDetector.DetectIfSale(w.ctx, txHash, deref(xfers))
+		if err != nil {
+			zap.L().Error("Sale detection failed", zap.Error(err), zap.String("txHash", txHash.Hex()))
+			continue
+		}
+		for i, tr := range xfers {
+			tr.Type = resultMap[i]
+		}
+	}
+
+	blockGroups := groupLogsByBlock(allTransfers)
 
 	if len(blockGroups) == 0 {
 		latestBlockChan <- endBlock
@@ -247,24 +281,28 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 	var lastLogTime time.Time
 
 	for _, b := range blocksWithLogs {
-		header, err := client.HeaderByNumber(ctx, big.NewInt(int64(b)))
+		header, err := w.client.HeaderByNumber(w.ctx, big.NewInt(int64(b)))
 		if err != nil {
 			zap.L().Error("Could not fetch block header", zap.Uint64("block", b), zap.Error(err))
 			return err
 		}
 		chainHash := header.Hash()
-		recordedHash, found := w.BlockTracker.GetHash(b)
+		recordedHash, found := w.blockTracker.GetHash(b)
 		if found && recordedHash != chainHash {
 			zap.L().Warn("Reorg detected",
 				zap.Uint64("block", b),
 				zap.String("oldHash", recordedHash.Hex()),
 				zap.String("newHash", chainHash.Hex()),
 			)
-			w.BlockTracker.RevertFromBlock(b)
+			_ = w.blockTracker.RevertFromBlock(b)
 			return ErrReorgDetected
 		}
 		if !found {
-			w.BlockTracker.SetHash(b, chainHash)
+			err := w.blockTracker.SetHash(b, chainHash)
+			if err != nil {
+				zap.L().Error("Could not set block hash", zap.Uint64("block", b), zap.Error(err))
+				return err
+			}
 		}
 
 		if time.Since(lastLogTime) >= 10*time.Second {
@@ -282,8 +320,8 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 
 		select {
 		case transfersChan <- logsInBlock:
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-w.ctx.Done():
+			return w.ctx.Err()
 		}
 	}
 
@@ -291,9 +329,15 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 	return nil
 }
 
+func deref(xfers []*tokens.TokenTransfer) []tokens.TokenTransfer {
+	derefed := make([]tokens.TokenTransfer, len(xfers))
+	for i, xfer := range xfers {
+		derefed[i] = *xfer
+	}
+	return derefed
+}
+
 func (w *DefaultTokensTransfersWatcher) checkAndHandleReorg(
-	ctx context.Context,
-	client EthClient,
 	startBlock uint64,
 ) error {
 	if startBlock == 0 {
@@ -306,8 +350,8 @@ func (w *DefaultTokensTransfersWatcher) checkAndHandleReorg(
 		if startBlock == 0 {
 			break
 		}
-		blockNum := startBlock - 1
-		recordedHash, found := w.BlockTracker.GetHash(blockNum)
+		blockNum := startBlock - 1 - uint64(i)
+		recordedHash, found := w.blockTracker.GetHash(blockNum)
 		if !found {
 			if blockNum == 0 {
 				return nil
@@ -315,7 +359,7 @@ func (w *DefaultTokensTransfersWatcher) checkAndHandleReorg(
 			startBlock--
 			continue
 		}
-		header, err := client.HeaderByNumber(ctx, big.NewInt(int64(blockNum)))
+		header, err := w.client.HeaderByNumber(w.ctx, big.NewInt(int64(blockNum)))
 		if err != nil {
 			zap.L().Error("Could not fetch block header (reorg check)",
 				zap.Uint64("block", blockNum),
@@ -331,7 +375,11 @@ func (w *DefaultTokensTransfersWatcher) checkAndHandleReorg(
 	}
 	if reorgStart > 0 {
 		zap.L().Warn("Deep reorg detected", zap.Uint64("reorgStartBlock", reorgStart))
-		w.BlockTracker.RevertFromBlock(reorgStart)
+		err := w.blockTracker.RevertFromBlock(reorgStart)
+		if err != nil {
+			zap.L().Error("Could not revert block hash", zap.Uint64("block", reorgStart), zap.Error(err))
+			return err
+		}
 		return ErrReorgDetected
 	}
 	return nil
@@ -360,12 +408,10 @@ func fetchLogsInRange(
 	return client.FilterLogs(ctx, query)
 }
 
-func groupLogsByBlock(decoded [][]tokens.TokenTransfer) map[uint64][]tokens.TokenTransfer {
+func groupLogsByBlock(decoded []tokens.TokenTransfer) map[uint64][]tokens.TokenTransfer {
 	groups := make(map[uint64][]tokens.TokenTransfer)
-	for _, batch := range decoded {
-		for _, t := range batch {
-			groups[t.BlockNumber] = append(groups[t.BlockNumber], t)
-		}
+	for _, t := range decoded {
+		groups[t.BlockNumber] = append(groups[t.BlockNumber], t)
 	}
 	return groups
 }
