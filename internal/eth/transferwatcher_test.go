@@ -128,9 +128,11 @@ func testWatchTransfersSimplePolling(t *testing.T) {
 	mockSalesDetector := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		Decoder:      mockDecoder,
-		BlockTracker: mockBlockDb,
-		SaleDetector: mockSalesDetector,
+		decoder:       mockDecoder,
+		blockTracker:  mockBlockDb,
+		salesDetector: mockSalesDetector,
+		client:        mockClient,
+		ctx:           ctx,
 	}
 
 	mockClient.On("SubscribeNewHead", mock.Anything, mock.Anything).
@@ -187,7 +189,7 @@ func testWatchTransfersSimplePolling(t *testing.T) {
 
 	doneCh := make(chan struct{})
 	go func() {
-		err := watcher.WatchTransfers(ctx, mockClient,
+		err := watcher.WatchTransfers(
 			[]string{"0xABCDEF"},
 			10,
 			transfersChan, latestBlockChan,
@@ -236,9 +238,11 @@ func testWatchTransfersSubscription(t *testing.T) {
 	mockSalesDetector := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		Decoder:      mockDecoder,
-		BlockTracker: blockDb,
-		SaleDetector: mockSalesDetector,
+		decoder:       mockDecoder,
+		blockTracker:  blockDb,
+		salesDetector: mockSalesDetector,
+		client:        mockClient,
+		ctx:           ctx,
 	}
 
 	startBlock := uint64(50)
@@ -346,8 +350,6 @@ func testWatchTransfersSubscription(t *testing.T) {
 	doneCh := make(chan error)
 	go func() {
 		err := watcher.WatchTransfers(
-			ctx,
-			mockClient,
 			[]string{"0xABCDEF"},
 			startBlock,
 			transfersChan,
@@ -405,8 +407,10 @@ func testReorgDetected(t *testing.T) {
 	mockSales := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		BlockTracker: mockBlockDb,
-		SaleDetector: mockSales,
+		blockTracker:  mockBlockDb,
+		salesDetector: mockSales,
+		client:        mockClient,
+		ctx:           ctx,
 	}
 
 	safeHash := makeHash(0xFA)
@@ -431,8 +435,6 @@ func testReorgDetected(t *testing.T) {
 		Return(nil).Once()
 
 	err := watcher.processRangeWithPartialReorg(
-		ctx,
-		mockClient,
 		nil,
 		100,
 		100,
@@ -455,8 +457,10 @@ func testReorgDuringCheckAndHandle(t *testing.T) {
 	mockSales := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		BlockTracker: mockBlockDb,
-		SaleDetector: mockSales,
+		blockTracker:  mockBlockDb,
+		salesDetector: mockSales,
+		client:        mockClient,
+		ctx:           ctx,
 	}
 
 	safeHash := makeHash(0x77)
@@ -485,7 +489,7 @@ func testReorgDuringCheckAndHandle(t *testing.T) {
 		Return(nil).
 		Once()
 
-	err := watcher.checkAndHandleReorg(ctx, mockClient, 15)
+	err := watcher.checkAndHandleReorg(15)
 	if err == nil {
 		t.Fatal("Expected a reorg error, got nil")
 	}
@@ -504,9 +508,11 @@ func testPollingErrorAndRecovery(t *testing.T) {
 	mockSales := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		Decoder:      mockDecoder,
-		BlockTracker: mockBlockDb,
-		SaleDetector: mockSales,
+		decoder:       mockDecoder,
+		blockTracker:  mockBlockDb,
+		salesDetector: mockSales,
+		client:        mockClient,
+		ctx:           ctx,
 	}
 
 	mockClient.On("SubscribeNewHead", mock.Anything, mock.Anything).
@@ -572,7 +578,12 @@ func testPollingErrorAndRecovery(t *testing.T) {
 
 	doneCh := make(chan error)
 	go func() {
-		err := watcher.WatchTransfers(ctx, mockClient, []string{}, 1, transfersChan, latestBlockChan)
+		err := watcher.WatchTransfers(
+			[]string{},
+			1,
+			transfersChan,
+			latestBlockChan,
+		)
 		doneCh <- err
 	}()
 
@@ -622,9 +633,11 @@ func testCancelContextMidway(t *testing.T) {
 	mockSales := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		Decoder:      mockDecoder,
-		BlockTracker: mockBlockDb,
-		SaleDetector: mockSales,
+		decoder:       mockDecoder,
+		blockTracker:  mockBlockDb,
+		salesDetector: mockSales,
+		client:        mockClient,
+		ctx:           ctx,
 	}
 
 	mockClient.On("HeaderByNumber", mock.Anything, mock.AnythingOfType("*big.Int")).
@@ -660,7 +673,12 @@ func testCancelContextMidway(t *testing.T) {
 
 	doneCh := make(chan error)
 	go func() {
-		err := watcher.WatchTransfers(ctx, mockClient, []string{}, 1, transfersChan, latestBlockChan)
+		err := watcher.WatchTransfers(
+			[]string{},
+			1,
+			transfersChan,
+			latestBlockChan,
+		)
 		doneCh <- err
 	}()
 
@@ -691,9 +709,11 @@ func testLargeBlockRange(t *testing.T) {
 	mockSales := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		Decoder:      mockDecoder,
-		BlockTracker: mockBlockDb,
-		SaleDetector: mockSales,
+		decoder:       mockDecoder,
+		blockTracker:  mockBlockDb,
+		salesDetector: mockSales,
+		client:        mockClient,
+		ctx:           ctx,
 	}
 
 	headerAt5000 := makeHeader(5000, makeHash(0x88))
@@ -754,7 +774,12 @@ func testLargeBlockRange(t *testing.T) {
 
 	doneCh := make(chan error, 1)
 	go func() {
-		err := watcher.WatchTransfers(ctx, mockClient, []string{}, 1, transfersChan, latestBlockChan)
+		err := watcher.WatchTransfers(
+			[]string{},
+			1,
+			transfersChan,
+			latestBlockChan,
+		)
 		doneCh <- err
 	}()
 
@@ -795,9 +820,11 @@ func testWatchTransfersSaleDetectionSuccess(t *testing.T) {
 	mockSales := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		Decoder:      mockDecoder,
-		BlockTracker: mockBlockDb,
-		SaleDetector: mockSales,
+		decoder:       mockDecoder,
+		blockTracker:  mockBlockDb,
+		salesDetector: mockSales,
+		client:        mockClient,
+		ctx:           ctx,
 	}
 
 	headerAt200 := makeHeader(200, makeHash(0xAA))
@@ -895,8 +922,6 @@ func testWatchTransfersSaleDetectionSuccess(t *testing.T) {
 	doneCh := make(chan error)
 	go func() {
 		err := watcher.WatchTransfers(
-			ctx,
-			mockClient,
 			[]string{"0xABCDEF"},
 			100,
 			transfersChan,
@@ -945,9 +970,11 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 	mockSales := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		Decoder:      mockDecoder,
-		BlockTracker: mockBlockDb,
-		SaleDetector: mockSales,
+		decoder:       mockDecoder,
+		blockTracker:  mockBlockDb,
+		salesDetector: mockSales,
+		client:        mockClient,
+		ctx:           ctx,
 	}
 
 	headerAt300 := makeHeader(300, makeHash(0x33))
@@ -1016,8 +1043,7 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 
 	doneCh := make(chan error)
 	go func() {
-		err := watcher.WatchTransfers(ctx,
-			mockClient,
+		err := watcher.WatchTransfers(
 			[]string{"0xFEEED"},
 			200,
 			transfersChan,

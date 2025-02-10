@@ -28,15 +28,14 @@ func main() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	contractListener, err := tdh.CreateTdhContractsListener(badger)
+	contractListener, err := tdh.CreateTdhContractsListener(badger, ctx)
 	if err != nil {
 		zap.L().Error("Failed to create Ethereum client", zap.Error(err))
 		return
 	}
 	defer cancel()
-	defer contractListener.Close()
 
-	if contractListener.Listen(ctx) != nil {
+	if contractListener.Listen() != nil {
 		zap.L().Error("Failed to watch contract events", zap.Error(err))
 	}
 }

@@ -8,13 +8,20 @@ import (
 )
 
 type TdhTransfersReceivedAction interface {
-	Handle(ctx context.Context, transfers []tokens.TokenTransfer) error
+	Handle(transfers []tokens.TokenTransfer) error
 }
 
 type DefaultTdhTransfersReceivedAction struct {
+	ctx context.Context
 }
 
-func (a *DefaultTdhTransfersReceivedAction) Handle(ctx context.Context, transfers []tokens.TokenTransfer) error {
+func NewDefaultTdhTransfersReceivedAction(ctx context.Context) *DefaultTdhTransfersReceivedAction {
+	return &DefaultTdhTransfersReceivedAction{
+		ctx: ctx,
+	}
+}
+
+func (a *DefaultTdhTransfersReceivedAction) Handle(transfers []tokens.TokenTransfer) error {
 	// This does nothing meaningful, but it's a placeholder for future implementation
 	for _, transfer := range transfers {
 		zap.L().Info(

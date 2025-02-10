@@ -8,8 +8,10 @@ import (
 )
 
 func TestTdhTransfersReceivedAction_Handle(t *testing.T) {
-	action := &DefaultTdhTransfersReceivedAction{}
-	err := action.Handle(context.Background(), []tokens.TokenTransfer{
+	action := &DefaultTdhTransfersReceivedAction{
+		ctx: context.Background(),
+	}
+	err := action.Handle([]tokens.TokenTransfer{
 		{
 			BlockNumber: 1,
 			TxHash:      "0x123",
