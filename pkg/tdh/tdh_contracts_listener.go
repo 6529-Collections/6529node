@@ -22,7 +22,7 @@ type TdhContractsListener struct {
 	progressTracker         eth.TdhIdxTrackerDb
 }
 
-func (client TdhContractsListener) Listen() error {
+func (client TdhContractsListener) listen(tipReachedChan chan<- bool) error {
 	nftActionsChan := make(chan []tokens.TokenTransfer)
 	go func() {
 		for batch := range nftActionsChan {
@@ -60,17 +60,37 @@ func (client TdhContractsListener) Listen() error {
 		startBlock,
 		nftActionsChan,
 		latestBlockChannel,
+		tipReachedChan,
 	)
 }
 
-func CreateTdhContractsListener(badger *badger.DB, ctx context.Context) (*TdhContractsListener, error) {
+func BlockUntilOnTipAndKeepListeningAsync(badger *badger.DB, ctx context.Context) error {
+	tdhSynchroniserFatalErrors := make(chan error, 10)
+	go func() {
+		for err := range tdhSynchroniserFatalErrors {
+			zap.L().Fatal("Fatal error listening on TDH contracts", zap.Error(err))
+		}
+	}()
 	transfersWatcher, err := eth.NewTokensTransfersWatcher(badger, ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return &TdhContractsListener{
+	listener := &TdhContractsListener{
 		transfersWatcher:        transfersWatcher,
 		transfersReceivedAction: eth.NewDefaultTdhTransfersReceivedAction(ctx),
 		progressTracker:         eth.NewTdhIdxTrackerDb(badger),
-	}, nil
+	}
+	tipReachedChan := make(chan bool, 10)
+	go func() {
+		err = listener.listen(tipReachedChan)
+		if err != nil {
+			tdhSynchroniserFatalErrors <- err
+		}
+	}()
+	select {
+	case <-tipReachedChan:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

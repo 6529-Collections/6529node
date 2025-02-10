@@ -3,6 +3,7 @@ package eth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"sort"
 	"time"
@@ -24,6 +25,7 @@ type TokensTransfersWatcher interface {
 		startBlock uint64,
 		transfersChan chan<- []tokens.TokenTransfer,
 		latestBlockChan chan<- uint64,
+		tipReachedChan chan<- bool,
 	) error
 }
 
@@ -60,7 +62,9 @@ func (w *DefaultTokensTransfersWatcher) WatchTransfers(
 	startBlock uint64,
 	transfersChan chan<- []tokens.TokenTransfer,
 	latestBlockChan chan<- uint64,
+	tipReachedChan chan<- bool,
 ) error {
+	defer w.client.Close()
 	contractAddrs := make([]common.Address, len(contracts))
 	for i, addr := range contracts {
 		contractAddrs[i] = common.HexToAddress(addr)
@@ -108,6 +112,9 @@ func (w *DefaultTokensTransfersWatcher) WatchTransfers(
 		}
 
 		newHeads := make(chan *types.Header, 16)
+
+		fmt.Println("tip reached")
+		tipReachedChan <- true
 		sub, err := w.client.SubscribeNewHead(w.ctx, newHeads)
 		if err != nil {
 			zap.L().Warn("Falling back to polling", zap.Error(err))

@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/6529-Collections/6529node/internal/config"
 	"github.com/6529-Collections/6529node/internal/db"
@@ -27,15 +30,21 @@ func main() {
 		zap.L().Error("Failed to open BadgerDB", zap.Error(err))
 		return
 	}
+	defer badger.Close()
 	ctx, cancel := context.WithCancel(context.Background())
-	contractListener, err := tdh.CreateTdhContractsListener(badger, ctx)
-	if err != nil {
-		zap.L().Error("Failed to create Ethereum client", zap.Error(err))
-		return
-	}
 	defer cancel()
-
-	if contractListener.Listen() != nil {
-		zap.L().Error("Failed to watch contract events", zap.Error(err))
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		zap.L().Info("Received termination signal, initiating shutdown", zap.String("signal", sig.String()))
+		cancel()
+	}()
+	if err := tdh.BlockUntilOnTipAndKeepListeningAsync(badger, ctx); err != nil {
+		zap.L().Error("Failed to listen on TDH contracts", zap.Error(err))
+		cancel()
 	}
+	<-ctx.Done()
+
+	zap.L().Info("Shutdown complete")
 }
