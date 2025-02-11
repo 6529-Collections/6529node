@@ -3,10 +3,11 @@ package libp2p
 import (
 	"context"
 	"fmt"
-	lp2p "github.com/libp2p/go-libp2p"
-	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"sync"
 	"time"
+
+	lp2p "github.com/libp2p/go-libp2p"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -33,89 +34,87 @@ type Libp2pTransport struct {
 	topics        map[string]*pubsub.Topic
 
 	mutex   sync.Mutex
-	running bool 
+	running bool
 }
 
 var NewGossipSubFn = pubsub.NewGossipSub
 
-
 func NewLibp2pTransport(maddr multiaddr.Multiaddr, parentCtx context.Context) (network.NetworkTransport, error) {
-    ctx, cancel := context.WithCancel(parentCtx)
+	ctx, cancel := context.WithCancel(parentCtx)
 
-    p2pHost, err := lp2p.New(
-        lp2p.DefaultTransports,
-        lp2p.DefaultSecurity,
-        lp2p.DefaultMuxers,
-        lp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
-    )
-    if err != nil {
-        cancel()
-        return nil, fmt.Errorf("failed to create libp2p host: %w", err)
-    }
+	p2pHost, err := lp2p.New(
+		lp2p.DefaultTransports,
+		lp2p.DefaultSecurity,
+		lp2p.DefaultMuxers,
+		lp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
+	)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create libp2p host: %w", err)
+	}
 
-    // Only attempt to parse and connect if maddr is not nil
-    if maddr != nil {
-        peerInfo, err := peer.AddrInfoFromP2pAddr(maddr)
-        if err == nil {
-            // Try connecting to the bootstrap peer (if provided)
-            maxRetries := 3
-            for i := 1; i <= maxRetries; i++ {
-                dialErr := p2pHost.Connect(ctx, *peerInfo)
-                if dialErr == nil {
-                    zap.L().Info("Connected to bootstrap peer",
-                        zap.String("peerID", peerInfo.ID.String()),
-                        zap.Int("attempt", i),
-                    )
-                    break
-                }
-                zap.L().Warn("Failed to connect to bootstrap peer",
-                    zap.Error(dialErr),
-                    zap.Int("attempt", i),
-                    zap.Int("maxRetries", maxRetries),
-                )
-                if i < maxRetries {
-                    time.Sleep(2 * time.Second)
-                }
-            }
-        } else {
-            zap.L().Warn("No valid peer info in bootstrap address", zap.Error(err))
-        }
-    } else {
-        zap.L().Info("No bootstrap multiaddr provided; skipping peer connect.")
-    }
+	// Only attempt to parse and connect if maddr is not nil
+	if maddr != nil {
+		peerInfo, err := peer.AddrInfoFromP2pAddr(maddr)
+		if err == nil {
+			// Try connecting to the bootstrap peer (if provided)
+			maxRetries := 3
+			for i := 1; i <= maxRetries; i++ {
+				dialErr := p2pHost.Connect(ctx, *peerInfo)
+				if dialErr == nil {
+					zap.L().Info("Connected to bootstrap peer",
+						zap.String("peerID", peerInfo.ID.String()),
+						zap.Int("attempt", i),
+					)
+					break
+				}
+				zap.L().Warn("Failed to connect to bootstrap peer",
+					zap.Error(dialErr),
+					zap.Int("attempt", i),
+					zap.Int("maxRetries", maxRetries),
+				)
+				if i < maxRetries {
+					time.Sleep(2 * time.Second)
+				}
+			}
+		} else {
+			zap.L().Warn("No valid peer info in bootstrap address", zap.Error(err))
+		}
+	} else {
+		zap.L().Info("No bootstrap multiaddr provided; skipping peer connect.")
+	}
 
-    gossipSub, err := NewGossipSubFn(ctx, p2pHost)
-    if err != nil {
-        p2pHost.Close()
-        cancel()
-        return nil, fmt.Errorf("failed to create gossipsub: %w", err)
-    }
+	gossipSub, err := NewGossipSubFn(ctx, p2pHost)
+	if err != nil {
+		p2pHost.Close()
+		cancel()
+		return nil, fmt.Errorf("failed to create gossipsub: %w", err)
+	}
 
-    transport := &Libp2pTransport{
-        remoteAddr:    maddr,
-        parentCtx:     parentCtx,
-        ctx:           ctx,
-        cancel:        cancel,
-        host:          p2pHost,
-        gossipSub:     gossipSub,
-        subscriptions: make(map[string]*subHolder),
-        topics:        make(map[string]*pubsub.Topic),
-        running:       false,
-    }
+	transport := &Libp2pTransport{
+		remoteAddr:    maddr,
+		parentCtx:     parentCtx,
+		ctx:           ctx,
+		cancel:        cancel,
+		host:          p2pHost,
+		gossipSub:     gossipSub,
+		subscriptions: make(map[string]*subHolder),
+		topics:        make(map[string]*pubsub.Topic),
+		running:       false,
+	}
 
-    transport.mutex.Lock()
-    transport.running = true
-    transport.mutex.Unlock()
+	transport.mutex.Lock()
+	transport.running = true
+	transport.mutex.Unlock()
 
-    zap.L().Info("Libp2pTransport started",
-        zap.String("remote", fmt.Sprintf("%v", maddr)),
-        zap.String("peerID", transport.host.ID().String()),
-        zap.Any("listenAddrs", transport.host.Addrs()),
-    )
+	zap.L().Info("Libp2pTransport started",
+		zap.String("remote", fmt.Sprintf("%v", maddr)),
+		zap.String("peerID", transport.host.ID().String()),
+		zap.Any("listenAddrs", transport.host.Addrs()),
+	)
 
-    return transport, nil
+	return transport, nil
 }
-
 
 func (transport *Libp2pTransport) Close() error {
 	transport.mutex.Lock()
