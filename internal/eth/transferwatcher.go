@@ -233,9 +233,6 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 	}
 }
 
-// processRangeAdaptive recursively fetches logs from [startBlock..endBlock].
-// If the logs exceed the threshold, it splits the range in half and handles
-// each half in ascending order. Otherwise, it decodes & processes them.
 func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 	contractAddrs []common.Address,
 	startBlock, endBlock uint64,
@@ -243,17 +240,14 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 	transfersChan chan<- []tokens.TokenTransfer,
 	latestBlockChan chan<- uint64,
 ) error {
-	// If start exceeds end, we have nothing to do.
 	if startBlock > endBlock {
 		return nil
 	}
 
-	// Check reorg boundary. If reorg is detected for startBlock, return immediately.
 	if err := w.checkAndHandleReorg(startBlock); err != nil {
 		return err
 	}
 
-	// Fetch logs for the entire [start..end].
 	logs, err := w.fetchLogsInRange(contractAddrs, startBlock, endBlock)
 	if err != nil {
 		zap.L().Error("Failed fetching logs (adaptive)",
@@ -264,10 +258,8 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 		return err
 	}
 
-	// If the total logs are above threshold and the range is more than 1 block, split
 	if len(logs) > maxLogsThreshold && endBlock > startBlock {
 		mid := (startBlock + endBlock) / 2
-		// Process lower half first
 		err := w.processRangeAdaptive(contractAddrs, startBlock, mid, maxLogsThreshold, transfersChan, latestBlockChan)
 		if err != nil {
 			if errors.Is(err, ErrReorgDetected) {
@@ -275,20 +267,16 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 			}
 			return err
 		}
-		// Then process upper half
 		return w.processRangeAdaptive(contractAddrs, mid+1, endBlock, maxLogsThreshold, transfersChan, latestBlockChan)
 	}
 
-	// Range is below threshold or a single block => decode & handle
 	decodedByBlock := w.decoder.Decode(logs)
 
-	// Flatten all transfers
 	var allTransfers []tokens.TokenTransfer
 	for _, blockTransfers := range decodedByBlock {
 		allTransfers = append(allTransfers, blockTransfers...)
 	}
 
-	// Run sale detection for each transaction
 	txMap := make(map[common.Hash][]*tokens.TokenTransfer)
 	for i := range allTransfers {
 		txHash := common.HexToHash(allTransfers[i].TxHash)
@@ -298,7 +286,6 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 		resultMap, err := w.salesDetector.DetectIfSale(w.ctx, txHash, deref(xfers))
 		if err != nil {
 			zap.L().Error("Sale detection failed", zap.Error(err), zap.String("txHash", txHash.Hex()))
-			// If sale detection fails, we still keep going; the transfers just remain .SEND etc.
 			continue
 		}
 		for i, tr := range xfers {
@@ -306,15 +293,12 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 		}
 	}
 
-	// Group by block for reorg checks & output
 	blockGroups := groupLogsByBlock(allTransfers)
 	if len(blockGroups) == 0 {
-		// Even if no logs, we say we finished up to endBlock
 		latestBlockChan <- endBlock
 		return nil
 	}
 
-	// Sort block numbers ascending
 	var blocksWithLogs []uint64
 	for b := range blockGroups {
 		blocksWithLogs = append(blocksWithLogs, b)
@@ -324,7 +308,6 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 	var lastLogTime time.Time
 
 	for _, b := range blocksWithLogs {
-		// Reorg check again for each block
 		header, err := w.client.HeaderByNumber(w.ctx, big.NewInt(int64(b)))
 		if err != nil {
 			zap.L().Error("Could not fetch block header", zap.Uint64("block", b), zap.Error(err))
@@ -355,7 +338,6 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 
 		logsInBlock := blockGroups[b]
 		sort.Slice(logsInBlock, func(i, j int) bool {
-			// Sort by transactionIndex, then logIndex
 			if logsInBlock[i].TransactionIndex != logsInBlock[j].TransactionIndex {
 				return logsInBlock[i].TransactionIndex < logsInBlock[j].TransactionIndex
 			}
@@ -369,7 +351,6 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 		}
 	}
 
-	// Let the caller know we have processed up to endBlock
 	latestBlockChan <- endBlock
 	return nil
 }
