@@ -40,7 +40,11 @@ func main() {
 	}
 	defer db.Close()
 
-	fmt.Println("Dumping BadgerDB contents to", *outputMode)
+	if *outputMode == "file" {
+		fmt.Println("Dumping BadgerDB contents to file", *outputFile)
+	} else {
+		fmt.Println("Dumping BadgerDB contents to console")
+	}
 
 	err = db.View(func(txn *badger.Txn) error {
 		it := txn.NewIterator(badger.DefaultIteratorOptions)

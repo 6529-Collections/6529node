@@ -43,11 +43,56 @@ type DefaultTdhTransfersReceivedAction struct {
 }
 
 func NewTdhTransfersReceivedActionImpl(db *badger.DB, ctx context.Context) *DefaultTdhTransfersReceivedAction {
+	
+	transferDb := NewTransferDb()
+	ownerDb := NewOwnerDb()
+	nftDb := NewNFTDb()
+	
+	db.Update(func(txn *badger.Txn) error {
+		allTransfers, err := transferDb.GetAllTransfers(txn)
+		if err != nil {
+			return fmt.Errorf("failed to get all transfers: %w", err)
+		}
+
+		gradientTransfers, err := transferDb.GetTransfersByContract(txn, constants.GRADIENTS_CONTRACT)
+		if err != nil {
+			return fmt.Errorf("failed to get gradient transfers: %w", err)
+		}
+
+		memesTransfers, err := transferDb.GetTransfersByContract(txn, constants.MEMES_CONTRACT)
+		if err != nil {
+			return fmt.Errorf("failed to get memes transfers: %w", err)
+		}
+
+		nextgenTransfers, err := transferDb.GetTransfersByContract(txn, constants.NEXTGEN_CONTRACT)
+		if err != nil {
+			return fmt.Errorf("failed to get nextgen transfers: %w", err)
+		}
+
+		zap.L().Info("Transfers", zap.Int("total", len(allTransfers)), zap.Int("gradient", len(gradientTransfers)), zap.Int("memes", len(memesTransfers)), zap.Int("nextgen", len(nextgenTransfers)))
+
+		sort.Slice(allTransfers, func(i, j int) bool {
+			return allTransfers[i].BlockNumber < allTransfers[j].BlockNumber
+		})
+		latestTransfer := allTransfers[len(allTransfers)-1]
+		zap.L().Info("Latest block", zap.Uint64("block", latestTransfer.BlockNumber), zap.Uint64("txIndex", latestTransfer.TransactionIndex), zap.Uint64("logIndex", latestTransfer.LogIndex))
+		
+
+		lastSavedCheckpointValue, err := getLastSavedCheckpoint(txn)
+		if err != nil {
+			return fmt.Errorf("failed to get last saved checkpoint: %w", err)
+		}
+		zap.L().Info("Last saved checkpoint", zap.String("checkpoint", string(lastSavedCheckpointValue)))
+
+		
+		return nil
+	})
+	
 	return &DefaultTdhTransfersReceivedAction{
 		db:         db,
-		transferDb: NewTransferDb(),
-		ownerDb:    NewOwnerDb(),
-		nftDb:      NewNFTDb(),
+		transferDb: transferDb,
+		ownerDb:    ownerDb,
+		nftDb:      nftDb,
 		ctx:        ctx,
 	}
 }
@@ -222,7 +267,7 @@ func (a *DefaultTdhTransfersReceivedAction) reset(blockNumber uint64, txIndex ui
 	}
 
 
-	zap.L().Info("Owner DB reset complete")
+	zap.L().Info("Transfers received DB reset complete")
 	return nil
 }
 
@@ -258,20 +303,9 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfers []tokens.TokenTrans
 
 		// Process each chunk in one transaction
 		err := a.db.Update(func(txn *badger.Txn) error {
-			var lastSavedCheckpointValue []byte
-			lastSavedCheckpoint, err := txn.Get([]byte(actionsReceivedCheckpointKey))
+			lastSavedCheckpointValue, err := getLastSavedCheckpoint(txn)
 			if err != nil {
-				if err == badger.ErrKeyNotFound {
-					zap.L().Info("No previous checkpoint found, starting fresh")
-					lastSavedCheckpointValue = []byte("0:0:0")
-				} else {
-					return fmt.Errorf("failed to retrieve last checkpoint: %w", err)
-				}
-			} else {
-				lastSavedCheckpointValue, err = lastSavedCheckpoint.ValueCopy(nil)
-				if err != nil {
-					return fmt.Errorf("failed to get last checkpoint value: %w", err)
-				}
+				return fmt.Errorf("failed to get last saved checkpoint: %w", err)
 			}
 
 			lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex, err := parseCheckpoint(string(lastSavedCheckpointValue))
@@ -327,4 +361,24 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfers []tokens.TokenTrans
 	}
 
 	return nil
+}
+
+func getLastSavedCheckpoint(txn *badger.Txn) ([]byte, error) {
+	var lastSavedCheckpointValue []byte
+	lastSavedCheckpoint, err := txn.Get([]byte(actionsReceivedCheckpointKey))
+	if err != nil {
+		if err == badger.ErrKeyNotFound {
+			zap.L().Info("No previous checkpoint found")
+			lastSavedCheckpointValue = []byte("0:0:0")
+		} else {
+			return nil, fmt.Errorf("failed to retrieve last checkpoint: %w", err)
+		}
+	} else {
+		lastSavedCheckpointValue, err = lastSavedCheckpoint.ValueCopy(nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get last checkpoint value: %w", err)
+		}
+	}
+
+	return lastSavedCheckpointValue, nil
 }

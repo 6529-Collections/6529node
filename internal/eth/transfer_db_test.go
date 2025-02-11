@@ -353,3 +353,154 @@ func TestTransferDb_ResetToCheckpoint(t *testing.T) {
 	})
 	require.NoError(t, err)
 }
+
+func TestTransferDb_GetTransfersByContract(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	transferDb := NewTransferDb()
+
+	// Insert multiple transfers across different contracts & token IDs
+	data := []tokens.TokenTransfer{
+		{
+			Contract:         "0xContractA",
+			TokenID:          "1",
+			BlockNumber:      5,
+			TransactionIndex: 0,
+			LogIndex:         0,
+			TxHash:           "0xTxAA",
+		},
+		{
+			Contract:         "0xContractA",
+			TokenID:          "2",
+			BlockNumber:      6,
+			TransactionIndex: 1,
+			LogIndex:         1,
+			TxHash:           "0xTxAB",
+		},
+		{
+			Contract:         "0xContractB",
+			TokenID:          "10",
+			BlockNumber:      7,
+			TransactionIndex: 0,
+			LogIndex:         0,
+			TxHash:           "0xTxBA",
+		},
+		{
+			Contract:         "0xContractB",
+			TokenID:          "11",
+			BlockNumber:      8,
+			TransactionIndex: 1,
+			LogIndex:         2,
+			TxHash:           "0xTxBB",
+		},
+	}
+
+	// Insert them into DB
+	err := db.Update(func(txn *badger.Txn) error {
+		for _, tr := range data {
+			if e := transferDb.StoreTransfer(txn, tr); e != nil {
+				return e
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+
+	// Query "0xContractA"
+	var contractA []tokens.TokenTransfer
+	err = db.View(func(txn *badger.Txn) error {
+		var e error
+		contractA, e = transferDb.GetTransfersByContract(txn, "0xContractA")
+		return e
+	})
+	require.NoError(t, err)
+	// We expect the first two items
+	assert.Len(t, contractA, 2)
+	assert.Equal(t, "0xContractA", contractA[0].Contract)
+	assert.Equal(t, "0xContractA", contractA[1].Contract)
+
+	// Query "0xContractB"
+	var contractB []tokens.TokenTransfer
+	err = db.View(func(txn *badger.Txn) error {
+		var e error
+		contractB, e = transferDb.GetTransfersByContract(txn, "0xContractB")
+		return e
+	})
+	require.NoError(t, err)
+	assert.Len(t, contractB, 2)
+	assert.Equal(t, "0xContractB", contractB[0].Contract)
+	assert.Equal(t, "0xContractB", contractB[1].Contract)
+
+	// Query unknown contract
+	var none []tokens.TokenTransfer
+	err = db.View(func(txn *badger.Txn) error {
+		var e error
+		none, e = transferDb.GetTransfersByContract(txn, "0xUnknown")
+		return e
+	})
+	require.NoError(t, err)
+	assert.Empty(t, none)
+}
+
+func TestTransferDb_GetTransfersByBlockMax(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	transferDb := NewTransferDb()
+
+	// Insert some transfers at different block numbers
+	data := []tokens.TokenTransfer{
+		{BlockNumber: 5, TransactionIndex: 0, LogIndex: 0, TxHash: "0xTxBlock5"},
+		{BlockNumber: 6, TransactionIndex: 1, LogIndex: 1, TxHash: "0xTxBlock6"},
+		{BlockNumber: 6, TransactionIndex: 2, LogIndex: 2, TxHash: "0xTxBlock6_2"},
+		{BlockNumber: 10, TransactionIndex: 3, LogIndex: 0, TxHash: "0xTxBlock10"},
+		{BlockNumber: 12, TransactionIndex: 0, LogIndex: 1, TxHash: "0xTxBlock12"},
+	}
+
+	err := db.Update(func(txn *badger.Txn) error {
+		for _, tr := range data {
+			if e := transferDb.StoreTransfer(txn, tr); e != nil {
+				return e
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+
+	// Query up to block 6 => should get block 5 and block 6 items
+	var upTo6 []tokens.TokenTransfer
+	err = db.View(func(txn *badger.Txn) error {
+		var e error
+		upTo6, e = transferDb.GetTransfersByBlockMax(txn, 6)
+		return e
+	})
+	require.NoError(t, err)
+	assert.Len(t, upTo6, 3, "Expected block#5 and block#6 (2 from block6)")
+
+	// Query up to block 10 => should get block 5,6,10
+	var upTo10 []tokens.TokenTransfer
+	err = db.View(func(txn *badger.Txn) error {
+		var e error
+		upTo10, e = transferDb.GetTransfersByBlockMax(txn, 10)
+		return e
+	})
+	require.NoError(t, err)
+	assert.Len(t, upTo10, 4, "Should get everything except block12")
+
+	// Query up to block 4 => should be none
+	var upTo4 []tokens.TokenTransfer
+	err = db.View(func(txn *badger.Txn) error {
+		var e error
+		upTo4, e = transferDb.GetTransfersByBlockMax(txn, 4)
+		return e
+	})
+	require.NoError(t, err)
+	assert.Empty(t, upTo4, "No transfers at or below block 4")
+
+	// Query up to block 20 => should get all
+	var upTo20 []tokens.TokenTransfer
+	err = db.View(func(txn *badger.Txn) error {
+		var e error
+		upTo20, e = transferDb.GetTransfersByBlockMax(txn, 20)
+		return e
+	})
+	require.NoError(t, err)
+	assert.Len(t, upTo20, len(data), "Should get all transfers in the DB")
+}

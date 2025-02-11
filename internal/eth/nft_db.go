@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/6529-Collections/6529node/pkg/constants"
 	"github.com/dgraph-io/badger/v4"
 	"go.uber.org/zap"
 )
@@ -14,6 +16,11 @@ DB Indexes Created Here:
 
 1. Primary NFT storage:
    "tdh:nft:{contract}:{tokenID}" => JSON(NFT)
+
+   tokenID padding for lexical ordering:
+   - 3 digits for gradients
+   - 5 digits for memes
+   - no padding for nextgen
 */
 
 type NFTDb interface {
@@ -216,5 +223,15 @@ func (n *NFTDbImpl) GetNftsByOwnerAddress(txn *badger.Txn, owner string) ([]NFT,
 }
 
 func nftKey(contract, tokenID string) string {
-	return fmt.Sprintf("%s%s:%s", nftPrefix, contract, tokenID)
+    switch contract {
+    case constants.GRADIENTS_CONTRACT:
+        tokenID = fmt.Sprintf("%03s", tokenID)
+    case constants.MEMES_CONTRACT:
+        tokenID = fmt.Sprintf("%05s", tokenID)
+    }
+
+    tokenID = strings.ReplaceAll(tokenID, " ", "0")
+
+    return fmt.Sprintf("%s%s:%s", nftPrefix, contract, tokenID)
 }
+

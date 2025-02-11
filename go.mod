@@ -5,6 +5,7 @@ go 1.23.4
 require (
 	github.com/dgraph-io/badger/v4 v4.5.1
 	github.com/ethereum/go-ethereum v1.14.12
+	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/spf13/viper v1.19.0
 	github.com/stretchr/testify v1.10.0
 	go.uber.org/zap v1.27.0

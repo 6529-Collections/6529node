@@ -3,6 +3,7 @@ package eth
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
 	"github.com/dgraph-io/badger/v4"
@@ -37,6 +38,8 @@ type TransferDb interface {
 	GetTransfersByTxHash(txn *badger.Txn, txHash string) ([]tokens.TokenTransfer, error)
 	GetTransfersByNft(txn *badger.Txn, contract, tokenID string) ([]tokens.TokenTransfer, error)
 	GetTransfersByAddress(txn *badger.Txn, address string) ([]tokens.TokenTransfer, error)
+	GetTransfersByContract(txn *badger.Txn, contract string) ([]tokens.TokenTransfer, error)
+	GetTransfersByBlockMax(txn *badger.Txn, blockNumber uint64) ([]tokens.TokenTransfer, error)
 }
 
 func NewTransferDb() TransferDb {
@@ -486,6 +489,95 @@ func (t *TransferDbImpl) GetTransfersByAddress(txn *badger.Txn, address string) 
 
 		var transfer tokens.TokenTransfer
 		err = pItem.Value(func(val []byte) error {
+			return json.Unmarshal(val, &transfer)
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		transfers = append(transfers, transfer)
+	}
+
+	return transfers, nil
+}
+
+func (t *TransferDbImpl) GetTransfersByContract(txn *badger.Txn, contract string) ([]tokens.TokenTransfer, error) {
+	var transfers []tokens.TokenTransfer
+
+	// We already have an NFT-based index: "tdh:transferByNft:{contract}:{tokenID}:{blockNumber}:..."
+	// To get everything for the entire contract, scan on just "tdh:transferByNft:{contract}:".
+	prefix := fmt.Sprintf("%s%s:", transferByNftPrefix, contract) // "tdh:transferByNft:0xABC..."
+
+	it := txn.NewIterator(badger.DefaultIteratorOptions)
+	defer it.Close()
+
+	for it.Seek([]byte(prefix)); it.ValidForPrefix([]byte(prefix)); it.Next() {
+		item := it.Item()
+
+		// The value stored at "tdh:transferByNft:..." is the primaryKey of the main record.
+		var primaryKey string
+		err := item.Value(func(val []byte) error {
+			primaryKey = string(val)
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		pItem, err := txn.Get([]byte(primaryKey))
+		if err == badger.ErrKeyNotFound {
+			// Skip missing primary records
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+
+		var transfer tokens.TokenTransfer
+		err = pItem.Value(func(val []byte) error {
+			return json.Unmarshal(val, &transfer)
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		transfers = append(transfers, transfer)
+	}
+
+	return transfers, nil
+}
+
+func (t *TransferDbImpl) GetTransfersByBlockMax(txn *badger.Txn, blockNumber uint64) ([]tokens.TokenTransfer, error) {
+	var transfers []tokens.TokenTransfer
+
+	// We'll iterate over the entire "tdh:transfer:" namespace, but stop once the blockNumber in the key
+	// exceeds the requested blockNumber. Because we zero-pad blockNumber to 10 digits, lexical ordering
+	// by key lines up with numerical ordering.
+	prefix := []byte(transferPrefix) // "tdh:transfer:"
+
+	it := txn.NewIterator(badger.DefaultIteratorOptions)
+	defer it.Close()
+
+	for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+		item := it.Item()
+		key := item.Key()
+
+		// key format: "tdh:transfer:0000000012:00000:00000:..." etc.
+		// extract the 10-digit block number substring
+		blockStr := string(key[len(prefix) : len(prefix)+10])
+		bn, err := strconv.ParseUint(blockStr, 10, 64)
+		if err != nil {
+			// If for some reason we fail to parse, treat it as an error
+			return nil, err
+		}
+
+		if bn > blockNumber {
+			// Once the blockNumber in the key is greater than the requested max,
+			// we can stop scanning altogether
+			break
+		}
+
+		var transfer tokens.TokenTransfer
+		err = item.Value(func(val []byte) error {
 			return json.Unmarshal(val, &transfer)
 		})
 		if err != nil {

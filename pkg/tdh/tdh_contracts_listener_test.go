@@ -7,6 +7,7 @@ import (
 
 	mocks "github.com/6529-Collections/6529node/internal/eth/mocks"
 	transferwatcher "github.com/6529-Collections/6529node/internal/eth/mocks/transferwatcher"
+	"github.com/6529-Collections/6529node/pkg/constants"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -22,13 +23,13 @@ func TestTdhContractsListener_Listen_ProgressGreaterThanEpochBlock(t *testing.T)
 	mTransfersWatcher := new(transferwatcher.TokensTransfersWatcher)
 
 	mIdxTracker.On("GetProgress").Return(uint64(13360878), nil).Once()
-	expectedStartBlock := TDH_CONTRACTS_EPOCH_BLOCK
+	expectedStartBlock := constants.TDH_CONTRACTS_EPOCH_BLOCK
 
 	mIdxTracker.On("SetProgress", mock.AnythingOfType("uint64")).Return(nil).Maybe()
 
 	mTransfersWatcher.
 		On("WatchTransfers",
-			[]string{MEMES_CONTRACT, GRADIENTS_CONTRACT, NEXTGEN_CONTRACT},
+			[]string{constants.MEMES_CONTRACT, constants.GRADIENTS_CONTRACT, constants.NEXTGEN_CONTRACT},
 			expectedStartBlock,
 			mock.Anything,
 			mock.Anything,
@@ -80,11 +81,11 @@ func TestTdhContractsListener_Listen_ProgressLessThanEpochBlock(t *testing.T) {
 	mTransfersWatcher.
 		On("WatchTransfers",
 			[]string{
-				MEMES_CONTRACT,
-				GRADIENTS_CONTRACT,
-				NEXTGEN_CONTRACT,
+				constants.MEMES_CONTRACT,
+				constants.GRADIENTS_CONTRACT,
+				constants.NEXTGEN_CONTRACT,
 			},
-			TDH_CONTRACTS_EPOCH_BLOCK,
+			constants.TDH_CONTRACTS_EPOCH_BLOCK,
 			mock.Anything,
 			mock.Anything,
 		).
