@@ -16,6 +16,8 @@ type Config struct {
 	EthereumNodeUrl          string `mapstructure:"ETHEREUM_NODE_URL"`
 	TdhMaxBlocksInBatch      uint64 `mapstructure:"TDH_MAX_BLOCKS_IN_BATCH"`
 	TdhMaxLogsInBatch        uint64 `mapstructure:"TDH_MAX_LOGS_IN_BATCH"`
+	P2PBootstrapAddr               string `mapstructure:"P2P_BOOTSTRAP_ADDR"`
+	MaxTransportConcurrency        int    `mapstructure:"MAX_TRANSPORT_CONCURRENCY"`
 }
 
 var lock = &sync.Mutex{}
@@ -47,6 +49,7 @@ func viperAddConfigFile() {
 	viper.AddConfigPath(".")
 	viper.SetConfigName("config")
 	viper.SetConfigType("env")
+	viper.SetDefault("MAX_TRANSPORT_CONCURRENCY", 10)
 }
 
 func viperAddEnv() {
