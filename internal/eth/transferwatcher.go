@@ -30,12 +30,13 @@ type TokensTransfersWatcher interface {
 }
 
 type DefaultTokensTransfersWatcher struct {
-	ctx           context.Context
-	client        EthClient
-	decoder       EthTransactionLogsDecoder
-	blockTracker  BlockHashDb
-	salesDetector SalesDetector
-	maxChunkSize  uint64
+	ctx              context.Context
+	client           EthClient
+	decoder          EthTransactionLogsDecoder
+	blockTracker     BlockHashDb
+	salesDetector    SalesDetector
+	maxBlocksInBatch uint64
+	maxLogsInBatch   uint64
 }
 
 func NewTokensTransfersWatcher(db *badger.DB, ctx context.Context) (*DefaultTokensTransfersWatcher, error) {
@@ -43,17 +44,22 @@ func NewTokensTransfersWatcher(db *badger.DB, ctx context.Context) (*DefaultToke
 	if err != nil {
 		return nil, err
 	}
-	maxChunkSize := config.Get().TdhTransferWatcherMaxChunkSize
-	if maxChunkSize == 0 {
-		maxChunkSize = 20000
+	maxBlocksInBatch := config.Get().TdhMaxBlocksInBatch
+	if maxBlocksInBatch == 0 {
+		maxBlocksInBatch = 20000
+	}
+	maxLogsInBatch := config.Get().TdhMaxLogsInBatch
+	if maxLogsInBatch == 0 {
+		maxLogsInBatch = 2000
 	}
 	return &DefaultTokensTransfersWatcher{
-		ctx:           ctx,
-		client:        ethClient,
-		decoder:       NewDefaultEthTransactionLogsDecoder(),
-		blockTracker:  NewBlockHashDb(db),
-		salesDetector: NewDefaultSalesDetector(ethClient),
-		maxChunkSize:  maxChunkSize,
+		ctx:              ctx,
+		client:           ethClient,
+		decoder:          NewDefaultEthTransactionLogsDecoder(),
+		blockTracker:     NewBlockHashDb(db),
+		salesDetector:    NewDefaultSalesDetector(ethClient),
+		maxBlocksInBatch: maxBlocksInBatch,
+		maxLogsInBatch:   maxLogsInBatch,
 	}, nil
 }
 
@@ -86,14 +92,15 @@ func (w *DefaultTokensTransfersWatcher) WatchTransfers(
 		}
 
 		if currentBlock <= tipBlock {
-			endBlock := currentBlock + w.maxChunkSize - 1
+			endBlock := currentBlock + w.maxBlocksInBatch - 1
 			if endBlock > tipBlock {
 				endBlock = tipBlock
 			}
-			err = w.processRangeWithPartialReorg(
+			err = w.processRangeAdaptive(
 				contractAddrs,
 				currentBlock,
 				endBlock,
+				int(w.maxLogsInBatch),
 				transfersChan,
 				latestBlockChan,
 			)
@@ -144,11 +151,11 @@ func (w *DefaultTokensTransfersWatcher) pollForNewBlocks(
 		}
 
 		if *currentBlock <= tipBlock {
-			endBlock := *currentBlock + w.maxChunkSize - 1
+			endBlock := *currentBlock + w.maxBlocksInBatch - 1
 			if endBlock > tipBlock {
 				endBlock = tipBlock
 			}
-			err := w.processRangeWithPartialReorg(contractAddrs, *currentBlock, endBlock, transfersChan, latestBlockChan)
+			err := w.processRangeAdaptive(contractAddrs, *currentBlock, endBlock, int(w.maxLogsInBatch), transfersChan, latestBlockChan)
 			if err != nil {
 				if errors.Is(err, ErrReorgDetected) {
 					continue
@@ -194,11 +201,11 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 			}
 			blockNum := header.Number.Uint64()
 			for *currentBlock < blockNum {
-				endBlock := *currentBlock + w.maxChunkSize - 1
+				endBlock := *currentBlock + w.maxBlocksInBatch - 1
 				if endBlock >= blockNum-1 {
 					endBlock = blockNum - 1
 				}
-				err := w.processRangeWithPartialReorg(contractAddrs, *currentBlock, endBlock, transfersChan, latestBlockChan)
+				err := w.processRangeAdaptive(contractAddrs, *currentBlock, endBlock, int(w.maxLogsInBatch), transfersChan, latestBlockChan)
 				if err != nil {
 					if errors.Is(err, ErrReorgDetected) {
 						continue
@@ -210,7 +217,7 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 			}
 
 			if blockNum >= *currentBlock {
-				err := w.processRangeWithPartialReorg(contractAddrs, blockNum, blockNum, transfersChan, latestBlockChan)
+				err := w.processRangeAdaptive(contractAddrs, blockNum, blockNum, int(w.maxLogsInBatch), transfersChan, latestBlockChan)
 				if err != nil {
 					if errors.Is(err, ErrReorgDetected) {
 						continue
@@ -226,19 +233,24 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 	}
 }
 
-func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
+func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 	contractAddrs []common.Address,
 	startBlock, endBlock uint64,
+	maxLogsThreshold int,
 	transfersChan chan<- []tokens.TokenTransfer,
 	latestBlockChan chan<- uint64,
 ) error {
+	if startBlock > endBlock {
+		return nil
+	}
+
 	if err := w.checkAndHandleReorg(startBlock); err != nil {
 		return err
 	}
 
-	logs, err := fetchLogsInRange(w.ctx, w.client, contractAddrs, startBlock, endBlock)
+	logs, err := w.fetchLogsInRange(contractAddrs, startBlock, endBlock)
 	if err != nil {
-		zap.L().Error("Failed fetching logs",
+		zap.L().Error("Failed fetching logs (adaptive)",
 			zap.Uint64("start", startBlock),
 			zap.Uint64("end", endBlock),
 			zap.Error(err),
@@ -246,10 +258,22 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 		return err
 	}
 
-	decoded := w.decoder.Decode(logs)
+	if len(logs) > maxLogsThreshold && endBlock > startBlock {
+		mid := (startBlock + endBlock) / 2
+		err := w.processRangeAdaptive(contractAddrs, startBlock, mid, maxLogsThreshold, transfersChan, latestBlockChan)
+		if err != nil {
+			if errors.Is(err, ErrReorgDetected) {
+				return err
+			}
+			return err
+		}
+		return w.processRangeAdaptive(contractAddrs, mid+1, endBlock, maxLogsThreshold, transfersChan, latestBlockChan)
+	}
+
+	decodedByBlock := w.decoder.Decode(logs)
 
 	var allTransfers []tokens.TokenTransfer
-	for _, blockTransfers := range decoded {
+	for _, blockTransfers := range decodedByBlock {
 		allTransfers = append(allTransfers, blockTransfers...)
 	}
 
@@ -258,7 +282,6 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 		txHash := common.HexToHash(allTransfers[i].TxHash)
 		txMap[txHash] = append(txMap[txHash], &allTransfers[i])
 	}
-
 	for txHash, xfers := range txMap {
 		resultMap, err := w.salesDetector.DetectIfSale(w.ctx, txHash, deref(xfers))
 		if err != nil {
@@ -271,7 +294,6 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 	}
 
 	blockGroups := groupLogsByBlock(allTransfers)
-
 	if len(blockGroups) == 0 {
 		latestBlockChan <- endBlock
 		return nil
@@ -281,9 +303,7 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 	for b := range blockGroups {
 		blocksWithLogs = append(blocksWithLogs, b)
 	}
-	sort.Slice(blocksWithLogs, func(i, j int) bool {
-		return blocksWithLogs[i] < blocksWithLogs[j]
-	})
+	sort.Slice(blocksWithLogs, func(i, j int) bool { return blocksWithLogs[i] < blocksWithLogs[j] })
 
 	var lastLogTime time.Time
 
@@ -296,7 +316,7 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 		chainHash := header.Hash()
 		recordedHash, found := w.blockTracker.GetHash(b)
 		if found && recordedHash != chainHash {
-			zap.L().Warn("Reorg detected",
+			zap.L().Warn("Reorg detected (adaptive)",
 				zap.Uint64("block", b),
 				zap.String("oldHash", recordedHash.Hex()),
 				zap.String("newHash", chainHash.Hex()),
@@ -305,8 +325,7 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 			return ErrReorgDetected
 		}
 		if !found {
-			err := w.blockTracker.SetHash(b, chainHash)
-			if err != nil {
+			if err := w.blockTracker.SetHash(b, chainHash); err != nil {
 				zap.L().Error("Could not set block hash", zap.Uint64("block", b), zap.Error(err))
 				return err
 			}
@@ -401,9 +420,7 @@ func latestBlockNumber(ctx context.Context, client EthClient) (uint64, error) {
 	return header.Number.Uint64(), nil
 }
 
-func fetchLogsInRange(
-	ctx context.Context,
-	client EthClient,
+func (w *DefaultTokensTransfersWatcher) fetchLogsInRange(
 	addresses []common.Address,
 	startBlock, endBlock uint64,
 ) ([]types.Log, error) {
@@ -412,7 +429,7 @@ func fetchLogsInRange(
 		ToBlock:   big.NewInt(int64(endBlock)),
 		Addresses: addresses,
 	}
-	return client.FilterLogs(ctx, query)
+	return w.client.FilterLogs(w.ctx, query)
 }
 
 func groupLogsByBlock(decoded []tokens.TokenTransfer) map[uint64][]tokens.TokenTransfer {
