@@ -8,6 +8,7 @@ import (
 
 	"github.com/6529-Collections/6529node/internal/config"
 	"github.com/6529-Collections/6529node/internal/db"
+	"github.com/6529-Collections/6529node/internal/network/creator"
 	"github.com/6529-Collections/6529node/pkg/tdh"
 	"go.uber.org/zap"
 )
@@ -23,8 +24,8 @@ func init() {
 }
 
 func main() {
-
 	zap.L().Info("Starting 6529-Collections/6529node...", zap.String("Version", Version))
+
 	badger, err := db.OpenBadger("./db")
 	if err != nil {
 		zap.L().Error("Failed to open BadgerDB", zap.Error(err))
@@ -40,6 +41,20 @@ func main() {
 		zap.L().Info("Received termination signal, initiating shutdown", zap.String("signal", sig.String()))
 		cancel()
 	}()
+
+	bootstrapAddr := config.Get().P2PBootstrapAddr
+	networkTransport, err := network_creator.NewNetworkTransport(bootstrapAddr, ctx)
+	if err != nil {
+		zap.L().Fatal("Failed to create network transport", zap.Error(err))
+	}
+
+	defer func() {
+		if err := networkTransport.Close(); err != nil {
+			zap.L().Warn("Error stopping transport", zap.Error(err))
+		}
+	}()
+
+	
 	if err := tdh.BlockUntilOnTipAndKeepListeningAsync(badger, ctx); err != nil {
 		zap.L().Error("Failed to listen on TDH contracts", zap.Error(err))
 		cancel()
