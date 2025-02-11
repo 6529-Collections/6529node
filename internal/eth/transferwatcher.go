@@ -96,10 +96,11 @@ func (w *DefaultTokensTransfersWatcher) WatchTransfers(
 			if endBlock > tipBlock {
 				endBlock = tipBlock
 			}
-			err = w.processRangeWithPartialReorg(
+			err = w.processRangeAdaptive(
 				contractAddrs,
 				currentBlock,
 				endBlock,
+				int(w.maxLogsInBatch),
 				transfersChan,
 				latestBlockChan,
 			)
@@ -154,7 +155,7 @@ func (w *DefaultTokensTransfersWatcher) pollForNewBlocks(
 			if endBlock > tipBlock {
 				endBlock = tipBlock
 			}
-			err := w.processRangeWithPartialReorg(contractAddrs, *currentBlock, endBlock, transfersChan, latestBlockChan)
+			err := w.processRangeAdaptive(contractAddrs, *currentBlock, endBlock, int(w.maxLogsInBatch), transfersChan, latestBlockChan)
 			if err != nil {
 				if errors.Is(err, ErrReorgDetected) {
 					continue
@@ -204,7 +205,7 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 				if endBlock >= blockNum-1 {
 					endBlock = blockNum - 1
 				}
-				err := w.processRangeWithPartialReorg(contractAddrs, *currentBlock, endBlock, transfersChan, latestBlockChan)
+				err := w.processRangeAdaptive(contractAddrs, *currentBlock, endBlock, int(w.maxLogsInBatch), transfersChan, latestBlockChan)
 				if err != nil {
 					if errors.Is(err, ErrReorgDetected) {
 						continue
@@ -216,7 +217,7 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 			}
 
 			if blockNum >= *currentBlock {
-				err := w.processRangeWithPartialReorg(contractAddrs, blockNum, blockNum, transfersChan, latestBlockChan)
+				err := w.processRangeAdaptive(contractAddrs, blockNum, blockNum, int(w.maxLogsInBatch), transfersChan, latestBlockChan)
 				if err != nil {
 					if errors.Is(err, ErrReorgDetected) {
 						continue
@@ -232,19 +233,30 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 	}
 }
 
-func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
+// processRangeAdaptive recursively fetches logs from [startBlock..endBlock].
+// If the logs exceed the threshold, it splits the range in half and handles
+// each half in ascending order. Otherwise, it decodes & processes them.
+func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 	contractAddrs []common.Address,
 	startBlock, endBlock uint64,
+	maxLogsThreshold int,
 	transfersChan chan<- []tokens.TokenTransfer,
 	latestBlockChan chan<- uint64,
 ) error {
+	// If start exceeds end, we have nothing to do.
+	if startBlock > endBlock {
+		return nil
+	}
+
+	// Check reorg boundary. If reorg is detected for startBlock, return immediately.
 	if err := w.checkAndHandleReorg(startBlock); err != nil {
 		return err
 	}
 
-	logs, newEndBlock, err := w.fetchLogsAdaptive(contractAddrs, startBlock, endBlock)
+	// Fetch logs for the entire [start..end].
+	logs, err := w.fetchLogsInRange(contractAddrs, startBlock, endBlock)
 	if err != nil {
-		zap.L().Error("Failed fetching logs",
+		zap.L().Error("Failed fetching logs (adaptive)",
 			zap.Uint64("start", startBlock),
 			zap.Uint64("end", endBlock),
 			zap.Error(err),
@@ -252,25 +264,41 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 		return err
 	}
 
-	endBlock = newEndBlock
+	// If the total logs are above threshold and the range is more than 1 block, split
+	if len(logs) > maxLogsThreshold && endBlock > startBlock {
+		mid := (startBlock + endBlock) / 2
+		// Process lower half first
+		err := w.processRangeAdaptive(contractAddrs, startBlock, mid, maxLogsThreshold, transfersChan, latestBlockChan)
+		if err != nil {
+			if errors.Is(err, ErrReorgDetected) {
+				return err
+			}
+			return err
+		}
+		// Then process upper half
+		return w.processRangeAdaptive(contractAddrs, mid+1, endBlock, maxLogsThreshold, transfersChan, latestBlockChan)
+	}
 
-	decoded := w.decoder.Decode(logs)
+	// Range is below threshold or a single block => decode & handle
+	decodedByBlock := w.decoder.Decode(logs)
 
+	// Flatten all transfers
 	var allTransfers []tokens.TokenTransfer
-	for _, blockTransfers := range decoded {
+	for _, blockTransfers := range decodedByBlock {
 		allTransfers = append(allTransfers, blockTransfers...)
 	}
 
+	// Run sale detection for each transaction
 	txMap := make(map[common.Hash][]*tokens.TokenTransfer)
 	for i := range allTransfers {
 		txHash := common.HexToHash(allTransfers[i].TxHash)
 		txMap[txHash] = append(txMap[txHash], &allTransfers[i])
 	}
-
 	for txHash, xfers := range txMap {
 		resultMap, err := w.salesDetector.DetectIfSale(w.ctx, txHash, deref(xfers))
 		if err != nil {
 			zap.L().Error("Sale detection failed", zap.Error(err), zap.String("txHash", txHash.Hex()))
+			// If sale detection fails, we still keep going; the transfers just remain .SEND etc.
 			continue
 		}
 		for i, tr := range xfers {
@@ -278,24 +306,25 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 		}
 	}
 
+	// Group by block for reorg checks & output
 	blockGroups := groupLogsByBlock(allTransfers)
-
 	if len(blockGroups) == 0 {
+		// Even if no logs, we say we finished up to endBlock
 		latestBlockChan <- endBlock
 		return nil
 	}
 
+	// Sort block numbers ascending
 	var blocksWithLogs []uint64
 	for b := range blockGroups {
 		blocksWithLogs = append(blocksWithLogs, b)
 	}
-	sort.Slice(blocksWithLogs, func(i, j int) bool {
-		return blocksWithLogs[i] < blocksWithLogs[j]
-	})
+	sort.Slice(blocksWithLogs, func(i, j int) bool { return blocksWithLogs[i] < blocksWithLogs[j] })
 
 	var lastLogTime time.Time
 
 	for _, b := range blocksWithLogs {
+		// Reorg check again for each block
 		header, err := w.client.HeaderByNumber(w.ctx, big.NewInt(int64(b)))
 		if err != nil {
 			zap.L().Error("Could not fetch block header", zap.Uint64("block", b), zap.Error(err))
@@ -304,7 +333,7 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 		chainHash := header.Hash()
 		recordedHash, found := w.blockTracker.GetHash(b)
 		if found && recordedHash != chainHash {
-			zap.L().Warn("Reorg detected",
+			zap.L().Warn("Reorg detected (adaptive)",
 				zap.Uint64("block", b),
 				zap.String("oldHash", recordedHash.Hex()),
 				zap.String("newHash", chainHash.Hex()),
@@ -313,8 +342,7 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 			return ErrReorgDetected
 		}
 		if !found {
-			err := w.blockTracker.SetHash(b, chainHash)
-			if err != nil {
+			if err := w.blockTracker.SetHash(b, chainHash); err != nil {
 				zap.L().Error("Could not set block hash", zap.Uint64("block", b), zap.Error(err))
 				return err
 			}
@@ -327,6 +355,7 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 
 		logsInBlock := blockGroups[b]
 		sort.Slice(logsInBlock, func(i, j int) bool {
+			// Sort by transactionIndex, then logIndex
 			if logsInBlock[i].TransactionIndex != logsInBlock[j].TransactionIndex {
 				return logsInBlock[i].TransactionIndex < logsInBlock[j].TransactionIndex
 			}
@@ -340,6 +369,7 @@ func (w *DefaultTokensTransfersWatcher) processRangeWithPartialReorg(
 		}
 	}
 
+	// Let the caller know we have processed up to endBlock
 	latestBlockChan <- endBlock
 	return nil
 }
@@ -419,35 +449,6 @@ func (w *DefaultTokensTransfersWatcher) fetchLogsInRange(
 		Addresses: addresses,
 	}
 	return w.client.FilterLogs(w.ctx, query)
-}
-
-func (w *DefaultTokensTransfersWatcher) fetchLogsAdaptive(
-	addresses []common.Address,
-	startBlock,
-	endBlock uint64,
-) ([]types.Log, uint64, error) {
-	const minChunkSize = uint64(1)
-
-	for {
-		logs, err := w.fetchLogsInRange(addresses, startBlock, endBlock)
-		if err != nil {
-			return nil, 0, err
-		}
-
-		if uint64(len(logs)) > w.maxLogsInBatch && (endBlock-startBlock+1) > minChunkSize {
-			halfRange := (endBlock - startBlock + 1) / 2
-			if halfRange < minChunkSize {
-				halfRange = minChunkSize
-			}
-			endBlock = startBlock + halfRange - 1
-			if endBlock < startBlock {
-				endBlock = startBlock
-			}
-			continue
-		}
-
-		return logs, endBlock, nil
-	}
 }
 
 func groupLogsByBlock(decoded []tokens.TokenTransfer) map[uint64][]tokens.TokenTransfer {

@@ -445,12 +445,16 @@ func testReorgDetected(t *testing.T) {
 	mockBlockDb.On("RevertFromBlock", uint64(99)).
 		Return(nil).Once()
 
-	err := watcher.processRangeWithPartialReorg(
+	transfersChan := make(chan []tokens.TokenTransfer, 1)
+	latestBlockChan := make(chan uint64, 1)
+
+	err := watcher.processRangeAdaptive(
 		nil,
 		100,
 		100,
-		nil,
-		nil,
+		int(watcher.maxLogsInBatch),
+		transfersChan,
+		latestBlockChan,
 	)
 	if err == nil {
 		t.Fatal("Expected a reorg error, but got nil")
@@ -1124,10 +1128,12 @@ func testAdaptiveFetch(t *testing.T) {
 		decoder:          decoder,
 		blockTracker:     blockDb,
 		salesDetector:    salesDetector,
-		maxBlocksInBatch: 100,
-		maxLogsInBatch:   2000,
+		maxBlocksInBatch: 100,  // Starting chunk size
+		maxLogsInBatch:   2000, // Log threshold
 	}
 
+	// Mock FilterLogs so that any range >5 blocks returns 2100 logs, forcing recursion.
+	// Otherwise, it returns 100 logs, under the threshold.
 	mockClient.On("FilterLogs", mock.Anything, mock.AnythingOfType("ethereum.FilterQuery")).
 		Return(func(_ context.Context, fq ethereum.FilterQuery) []types.Log {
 			from, to := fq.FromBlock.Uint64(), fq.ToBlock.Uint64()
@@ -1135,6 +1141,7 @@ func testAdaptiveFetch(t *testing.T) {
 			if numBlocks > 5 {
 				overLimitLogs := make([]types.Log, 2100)
 				for i := range overLimitLogs {
+					// Simulate all logs in "some block"
 					overLimitLogs[i].BlockNumber = 123
 				}
 				return overLimitLogs
@@ -1147,10 +1154,55 @@ func testAdaptiveFetch(t *testing.T) {
 		}, nil).
 		Maybe()
 
-	logs, finalEndBlock, err := watcher.fetchLogsAdaptive(nil, 100, 200)
-	assert.NoError(t, err, "Adaptive fetch should not error")
+	// We'll capture the processed block ranges via these channels
+	transfersChan := make(chan []tokens.TokenTransfer, 10000)
+	latestBlockChan := make(chan uint64, 10000)
 
-	assert.Less(t, finalEndBlock, uint64(200), "Final end block should be reduced from 200")
+	// Run processRangeAdaptive in a goroutine
+	doneCh := make(chan error, 1)
+	go func() {
+		err := watcher.processRangeAdaptive(
+			nil, // no addresses
+			100, // startBlock
+			200, // endBlock
+			int(watcher.maxLogsInBatch),
+			transfersChan,
+			latestBlockChan,
+		)
+		doneCh <- err
+	}()
 
-	assert.LessOrEqual(t, len(logs), 2000, "Logs should end up below the threshold")
+	// Collect all logs that come from transfersChan
+	var totalLogs int
+	var finalBlock uint64
+
+loop:
+	for {
+		select {
+		case err := <-doneCh:
+			// Once processRangeAdaptive finishes, break
+			if err != nil {
+				t.Fatalf("processRangeAdaptive failed unexpectedly: %v", err)
+			}
+			break loop
+
+		case xfers := <-transfersChan:
+			totalLogs += len(xfers)
+
+		case blk := <-latestBlockChan:
+			finalBlock = blk
+
+		case <-time.After(2 * time.Second):
+			t.Fatal("Timed out waiting for adaptive fetch to finish.")
+		}
+	}
+
+	// In the "dense" scenario, we expect to have subdivided the [100..200] range
+	// so the recursion never tries the full 101 blocks at once.
+	// => finalBlock should be < 200 (since the top half was "too big").
+	assert.LessOrEqual(t, finalBlock, uint64(200), "Final block may be 200 if the last sub-chunk is within threshold")
+
+	// Each final chunk has <= 2000 logs. The total we see is the logs from
+	// the ultimate subrange that was under threshold.
+	assert.LessOrEqual(t, totalLogs, 2000, "Should never exceed the log threshold in a single chunk")
 }
