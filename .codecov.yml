@@ -1,7 +1,7 @@
 ignore:
   - "cmd/node/main.go"
   - "internal/eth/mocks"
-
+  - "internal/network/mocks"
 coverage:
   status:
     project:
