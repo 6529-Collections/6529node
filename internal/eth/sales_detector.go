@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/6529-Collections/6529node/pkg/constants"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -944,9 +945,9 @@ func (d *DefaultSalesDetector) DetectIfSale(
 		fromLower := strings.ToLower(tr.From)
 		toLower := strings.ToLower(tr.To)
 		switch {
-		case fromLower == "0x0000000000000000000000000000000000000000":
+		case fromLower == constants.NULL_ADDRESS:
 			result[i] = tokens.MINT
-		case toLower == "0x0000000000000000000000000000000000000000":
+		case toLower == constants.NULL_ADDRESS || toLower == constants.DEAD_ADDRESS:
 			result[i] = tokens.BURN
 		default:
 			result[i] = tokens.SEND

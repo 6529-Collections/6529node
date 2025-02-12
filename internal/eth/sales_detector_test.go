@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/6529-Collections/6529node/pkg/constants"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -243,7 +244,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 		detector := NewDefaultSalesDetector(mockClient)
 
 		mintTransfers := []tokens.TokenTransfer{{
-			From:     "0x0000000000000000000000000000000000000000",
+			From:     constants.NULL_ADDRESS,
 			To:       "0xSomeUser",
 			Contract: "0xSomeNft",
 			TokenID:  "123",
@@ -273,7 +274,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 		detector := NewDefaultSalesDetector(mockClient)
 
 		mintTransfers := []tokens.TokenTransfer{{
-			From:     "0x0000000000000000000000000000000000000000",
+			From:     constants.NULL_ADDRESS,
 			To:       "0xSomeUser",
 			Contract: "0xSomeNft",
 			TokenID:  "999",
@@ -304,7 +305,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 
 		burnTransfers := []tokens.TokenTransfer{{
 			From:     "0xSomeUser",
-			To:       "0x0000000000000000000000000000000000000000",
+			To:       constants.DEAD_ADDRESS,
 			Contract: "0xSomeNft",
 			TokenID:  "77",
 		}}
@@ -334,7 +335,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 
 		burnTransfers := []tokens.TokenTransfer{{
 			From:     "0xSomeUser",
-			To:       "0x0000000000000000000000000000000000000000",
+			To:       constants.NULL_ADDRESS,
 			Contract: "0xSomeNft",
 			TokenID:  "12",
 		}}
