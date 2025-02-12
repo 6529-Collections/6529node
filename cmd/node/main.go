@@ -8,6 +8,7 @@ import (
 
 	"github.com/6529-Collections/6529node/internal/config"
 	"github.com/6529-Collections/6529node/internal/db"
+	network_creator "github.com/6529-Collections/6529node/internal/network/creator"
 	"github.com/6529-Collections/6529node/pkg/tdh"
 	"go.uber.org/zap"
 )
