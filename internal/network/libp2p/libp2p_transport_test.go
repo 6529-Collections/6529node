@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/6529-Collections/6529node/internal/network/libp2p"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
-	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -105,9 +105,6 @@ func TestGossipSubCreationFailure_Forced(t *testing.T) {
 		t.Fatalf("Expected nil transport on forced error, got %#v", tr)
 	}
 }
-
-
-
 
 func TestHostCreation_SuccessfulDial(t *testing.T) {
 	t.Parallel()

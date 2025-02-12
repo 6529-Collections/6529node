@@ -16,13 +16,12 @@ import (
 
 	"github.com/6529-Collections/6529node/internal/network"
 	"github.com/6529-Collections/6529node/internal/network/mocks"
-    "github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/mock"
 )
 
 var mockLibp2pError bool
 var mockLibp2pBlock time.Duration
 var originalLibp2pTransportFunc = libp2pTransportFunc
-
 
 func overrideLibp2pTransportFunc(t *testing.T) {
 	libp2pTransportFunc = func(ma multiaddr.Multiaddr, ctx context.Context) (network.NetworkTransport, error) {
@@ -38,7 +37,6 @@ func overrideLibp2pTransportFunc(t *testing.T) {
 		mockTransport.On("Publish", mock.Anything, mock.Anything).Maybe().Return(nil)
 		mockTransport.On("Subscribe", mock.Anything, mock.Anything).Maybe().Return(nil)
 		mockTransport.On("Unsubscribe", mock.Anything).Maybe().Return(nil)
-		
 
 		return mockTransport, nil
 	}
@@ -85,7 +83,7 @@ func TestNewNetworkTransport_TableDriven(t *testing.T) {
 				mockLibp2pError = false
 				mockLibp2pBlock = 0
 			},
-			wantErr:     false,
+			wantErr: false,
 		},
 		{
 			name:          "Valid Multiaddr",
@@ -95,7 +93,7 @@ func TestNewNetworkTransport_TableDriven(t *testing.T) {
 				mockLibp2pError = false
 				mockLibp2pBlock = 0
 			},
-			wantErr:  false,
+			wantErr: false,
 		},
 		{
 			name:          "Invalid Multiaddr",

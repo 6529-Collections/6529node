@@ -53,9 +53,9 @@ type TxKey struct {
 
 // mismatch keeps track of where Badger's TransferType differs from SQLite's derived type.
 type mismatch struct {
-	Key         TxKey
-	BadgerType  tokens.TransferType
-	SQLiteType  tokens.TransferType
+	Key        TxKey
+	BadgerType tokens.TransferType
+	SQLiteType tokens.TransferType
 }
 
 func main() {

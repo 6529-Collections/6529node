@@ -8,13 +8,13 @@ import (
 )
 
 func setupTestInMemoryDB(t *testing.T) *badger.DB {
-    t.Helper()
+	t.Helper()
 
-    opts := badger.DefaultOptions("").WithInMemory(true).
-        WithLogger(nil) // disable logs for test cleanliness
+	opts := badger.DefaultOptions("").WithInMemory(true).
+		WithLogger(nil) // disable logs for test cleanliness
 
-    db, err := badger.Open(opts)
-    require.NoError(t, err)
+	db, err := badger.Open(opts)
+	require.NoError(t, err)
 
-    return db
+	return db
 }

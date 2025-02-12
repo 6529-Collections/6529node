@@ -50,7 +50,7 @@ func (client TdhContractsListener) listen(tipReachedChan chan<- bool) error {
 			}
 		}
 	}()
-	
+
 	// Start transfers watching in a separate goroutine
 	done := make(chan error, 1)
 	go func() {

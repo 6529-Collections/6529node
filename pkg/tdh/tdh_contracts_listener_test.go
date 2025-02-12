@@ -198,7 +198,7 @@ func TestTdhContractsListener_Listen_HandleErrorStopsLoop(t *testing.T) {
 			nftChan := args.Get(2).(chan<- []tokens.TokenTransfer)
 			lbChan := args.Get(3).(chan<- uint64)
 
-			nftChan <- []tokens.TokenTransfer{{From: "0xBAD"}} // Should trigger error and stop
+			nftChan <- []tokens.TokenTransfer{{From: "0xBAD"}}  // Should trigger error and stop
 			nftChan <- []tokens.TokenTransfer{{From: "0xGOOD"}} // Should never be processed
 
 			close(nftChan)

@@ -19,7 +19,6 @@ DB Indexes Created Here:
    - Allows scanning all owners for a given NFT with a prefix "tdh:nftowners:{contract}:{tokenID}:"
 */
 
-
 type OwnerDb interface {
 	ResetOwners(db *badger.DB) error
 	UpdateOwnership(txn *badger.Txn, from, to, contract, tokenID string, amount int64) error
@@ -38,15 +37,15 @@ const ownerPrefix = "tdh:owner:"
 const nftOwnersPrefix = "tdh:nftowners:"
 
 func (o *OwnerDbImpl) ResetOwners(db *badger.DB) error {
-    prefixes := [][]byte{[]byte(ownerPrefix), []byte(nftOwnersPrefix)}
+	prefixes := [][]byte{[]byte(ownerPrefix), []byte(nftOwnersPrefix)}
 
-    for _, prefix := range prefixes {
-        if err := db.DropPrefix(prefix); err != nil {
-            return fmt.Errorf("failed to drop prefix %s: %w", prefix, err)
-        }
-    }
+	for _, prefix := range prefixes {
+		if err := db.DropPrefix(prefix); err != nil {
+			return fmt.Errorf("failed to drop prefix %s: %w", prefix, err)
+		}
+	}
 
-    return nil
+	return nil
 }
 
 func (o *OwnerDbImpl) UpdateOwnership(txn *badger.Txn, from, to, contract, tokenID string, amount int64) error {
@@ -202,4 +201,3 @@ func (o *OwnerDbImpl) GetAllOwners(txn *badger.Txn) (map[string]int64, error) {
 
 	return owners, nil
 }
-

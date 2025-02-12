@@ -182,7 +182,6 @@ func (t *TransferDbImpl) ResetToCheckpoint(
 		txIndex,
 		logIndex,
 	))
-	
 
 	zap.L().Info("Resetting to checkpoint",
 		zap.Uint64("blockNumber", blockNumber),

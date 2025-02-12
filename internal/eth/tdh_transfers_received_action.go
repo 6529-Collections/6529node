@@ -22,16 +22,16 @@ var ErrResetRequired = errors.New("reset required due to out-of-order checkpoint
 const actionsReceivedCheckpointKey = "tdh:actionsReceivedCheckpoint"
 
 func checkpointValue(t tokens.TokenTransfer) string {
-    return fmt.Sprintf("%d:%d:%d", t.BlockNumber, t.TransactionIndex, t.LogIndex)
+	return fmt.Sprintf("%d:%d:%d", t.BlockNumber, t.TransactionIndex, t.LogIndex)
 }
 
 func parseCheckpoint(value string) (uint64, uint64, uint64, error) {
-    var block, txIndex, logIndex uint64
-    _, err := fmt.Sscanf(value, "%d:%d:%d", &block, &txIndex, &logIndex)
-    if err != nil {
-        return 0, 0, 0, fmt.Errorf("invalid checkpoint format: %w", err)
-    }
-    return block, txIndex, logIndex, nil
+	var block, txIndex, logIndex uint64
+	_, err := fmt.Sscanf(value, "%d:%d:%d", &block, &txIndex, &logIndex)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("invalid checkpoint format: %w", err)
+	}
+	return block, txIndex, logIndex, nil
 }
 
 type DefaultTdhTransfersReceivedAction struct {
@@ -43,12 +43,12 @@ type DefaultTdhTransfersReceivedAction struct {
 }
 
 func NewTdhTransfersReceivedActionImpl(db *badger.DB, ctx context.Context) *DefaultTdhTransfersReceivedAction {
-	
+
 	transferDb := NewTransferDb()
 	ownerDb := NewOwnerDb()
 	nftDb := NewNFTDb()
-	
-	db.View(func(txn *badger.Txn) error {
+
+	err := db.View(func(txn *badger.Txn) error {
 		allTransfers, err := transferDb.GetAllTransfers(txn)
 		if err != nil {
 			return fmt.Errorf("failed to get all transfers: %w", err)
@@ -80,7 +80,6 @@ func NewTdhTransfersReceivedActionImpl(db *badger.DB, ctx context.Context) *Defa
 		}
 		latestTransfer := allTransfers[len(allTransfers)-1]
 		zap.L().Info("Latest block", zap.Uint64("block", latestTransfer.BlockNumber), zap.Uint64("txIndex", latestTransfer.TransactionIndex), zap.Uint64("logIndex", latestTransfer.LogIndex))
-		
 
 		lastSavedCheckpointValue, err := getLastSavedCheckpoint(txn)
 		if err != nil {
@@ -88,10 +87,14 @@ func NewTdhTransfersReceivedActionImpl(db *badger.DB, ctx context.Context) *Defa
 		}
 		zap.L().Info("Last saved checkpoint", zap.String("checkpoint", string(lastSavedCheckpointValue)))
 
-		
 		return nil
 	})
-	
+
+	if err != nil {
+		zap.L().Error("Failed to view db", zap.Error(err))
+		return nil
+	}
+
 	return &DefaultTdhTransfersReceivedAction{
 		db:         db,
 		transferDb: transferDb,
@@ -100,7 +103,6 @@ func NewTdhTransfersReceivedActionImpl(db *badger.DB, ctx context.Context) *Defa
 		ctx:        ctx,
 	}
 }
-
 
 func (a *DefaultTdhTransfersReceivedAction) applyTransfer(
 	txn *badger.Txn,
@@ -169,7 +171,6 @@ func (a *DefaultTdhTransfersReceivedAction) applyTransfer(
 	return nil
 }
 
-
 func (a *DefaultTdhTransfersReceivedAction) reset(blockNumber uint64, txIndex uint64, logIndex uint64) error {
 	zap.L().Info("Resetting transfers received DB", zap.Uint64("blockNumber", blockNumber), zap.Uint64("txIndex", txIndex), zap.Uint64("logIndex", logIndex))
 
@@ -184,11 +185,10 @@ func (a *DefaultTdhTransfersReceivedAction) reset(blockNumber uint64, txIndex ui
 	if nftErr != nil {
 		return fmt.Errorf("failed to reset NFTs: %w", nftErr)
 	}
-	
 
 	// Reset and fetch all transfers
 	var remainingTransfers []tokens.TokenTransfer
-	 transferErr := a.db.Update(func(txn *badger.Txn) error {
+	transferErr := a.db.Update(func(txn *badger.Txn) error {
 		startingRransfers, err := a.transferDb.GetAllTransfers(txn)
 		if err != nil {
 			return fmt.Errorf("failed to get all transfers before reset: %w", err)
@@ -213,7 +213,7 @@ func (a *DefaultTdhTransfersReceivedAction) reset(blockNumber uint64, txIndex ui
 		return fmt.Errorf("failed to reset transfers: %w", transferErr)
 	}
 
-	zap.L().Info("Remaining transfers", zap.Int("count", len(remainingTransfers)))	
+	zap.L().Info("Remaining transfers", zap.Int("count", len(remainingTransfers)))
 
 	// Sort transfers
 	sort.Slice(remainingTransfers, func(i, j int) bool {
@@ -225,7 +225,6 @@ func (a *DefaultTdhTransfersReceivedAction) reset(blockNumber uint64, txIndex ui
 		}
 		return remainingTransfers[i].LogIndex < remainingTransfers[j].LogIndex
 	})
-
 
 	// Replay Transfers in batches
 	const batchSize = 100
@@ -270,7 +269,6 @@ func (a *DefaultTdhTransfersReceivedAction) reset(blockNumber uint64, txIndex ui
 		}
 	}
 
-
 	zap.L().Info("Transfers received DB reset complete")
 	return nil
 }
@@ -284,7 +282,7 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfers []tokens.TokenTrans
 		return nil
 	}
 
-	numBatches := (numTransfers + batchSize - 1) / batchSize  // integer ceil
+	numBatches := (numTransfers + batchSize - 1) / batchSize // integer ceil
 
 	for batchIndex := 0; batchIndex < numBatches; batchIndex++ {
 		start := batchIndex * batchSize
@@ -351,7 +349,11 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfers []tokens.TokenTrans
 		if err != nil {
 			if errors.Is(err, ErrResetRequired) {
 				zap.L().Warn("Resetting due to checkpoint mismatch")
-				a.reset(firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex)
+				err = a.reset(firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex)
+				if err != nil {
+					zap.L().Error("Failed to reset", zap.Error(err))
+					return err
+				}
 				return a.Handle(transfers) // Restart from scratch
 			}
 			return err

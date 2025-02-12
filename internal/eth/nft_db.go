@@ -68,10 +68,10 @@ func (n *NFTDbImpl) GetNFT(txn *badger.Txn, contract, tokenID string) (*NFT, err
 }
 
 func (n *NFTDbImpl) ResetNFTs(db *badger.DB) error {
-    if err := db.DropPrefix([]byte(nftPrefix)); err != nil {
-        return fmt.Errorf("failed to drop prefix %s: %w", nftPrefix, err)
-    }
-    return nil
+	if err := db.DropPrefix([]byte(nftPrefix)); err != nil {
+		return fmt.Errorf("failed to drop prefix %s: %w", nftPrefix, err)
+	}
+	return nil
 }
 
 // UpdateSupply increases the total supply when minting.
@@ -223,15 +223,14 @@ func (n *NFTDbImpl) GetNftsByOwnerAddress(txn *badger.Txn, owner string) ([]NFT,
 }
 
 func nftKey(contract, tokenID string) string {
-    switch contract {
-    case constants.GRADIENTS_CONTRACT:
-        tokenID = fmt.Sprintf("%03s", tokenID)
-    case constants.MEMES_CONTRACT:
-        tokenID = fmt.Sprintf("%05s", tokenID)
-    }
+	switch contract {
+	case constants.GRADIENTS_CONTRACT:
+		tokenID = fmt.Sprintf("%03s", tokenID)
+	case constants.MEMES_CONTRACT:
+		tokenID = fmt.Sprintf("%05s", tokenID)
+	}
 
-    tokenID = strings.ReplaceAll(tokenID, " ", "0")
+	tokenID = strings.ReplaceAll(tokenID, " ", "0")
 
-    return fmt.Sprintf("%s%s:%s", nftPrefix, contract, tokenID)
+	return fmt.Sprintf("%s%s:%s", nftPrefix, contract, tokenID)
 }
-
