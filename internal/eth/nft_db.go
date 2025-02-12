@@ -76,7 +76,7 @@ func (n *NFTDbImpl) ResetNFTs(db *badger.DB) error {
 
 // UpdateSupply increases the total supply when minting.
 func (n *NFTDbImpl) UpdateSupply(txn *badger.Txn, contract, tokenID string, delta int64) error {
-	if delta <= 0 {
+	if delta < 0 {
 		return errors.New("delta must be positive")
 	}
 

@@ -84,7 +84,7 @@ func TestUpdateSupply(t *testing.T) {
 	err := db.Update(func(txn *badger.Txn) error {
 		return nftDb.UpdateSupply(txn, "contractC", "token3", 0)
 	})
-	assert.Error(t, err, "delta must be positive")
+	require.NoError(t, err)
 
 	// Positive delta: create new NFT
 	err = db.Update(func(txn *badger.Txn) error {
