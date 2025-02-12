@@ -101,6 +101,7 @@ func TestDefaultTokensTransfersWatcher(t *testing.T) {
 	t.Run("TestLargeBlockRange", testLargeBlockRange)
 	t.Run("TestWatchTransfers_SaleDetectionSuccess", testWatchTransfersSaleDetectionSuccess)
 	t.Run("TestWatchTransfers_SaleDetectionError", testWatchTransfersSaleDetectionError)
+	t.Run("TestAdaptiveFetch", testAdaptiveFetch)
 }
 
 func testGroupLogsByBlock(t *testing.T) {
@@ -128,17 +129,20 @@ func testWatchTransfersSimplePolling(t *testing.T) {
 	mockSalesDetector := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		decoder:       mockDecoder,
-		blockTracker:  mockBlockDb,
-		salesDetector: mockSalesDetector,
-		client:        mockClient,
-		ctx:           ctx,
-		maxChunkSize:  20000,
+		decoder:          mockDecoder,
+		blockTracker:     mockBlockDb,
+		salesDetector:    mockSalesDetector,
+		client:           mockClient,
+		ctx:              ctx,
+		maxBlocksInBatch: 20000,
+		maxLogsInBatch:   2000,
 	}
 
 	mockClient.On("SubscribeNewHead", mock.Anything, mock.Anything).
 		Return(nil, errors.New("no wss support")).
 		Maybe()
+
+	mockClient.On("Close").Return(nil).Once()
 
 	headerAt12 := makeHeader(12, makeHash(0x12))
 	mockClient.On("HeaderByNumber", mock.Anything, (*big.Int)(nil)).
@@ -164,7 +168,6 @@ func testWatchTransfersSimplePolling(t *testing.T) {
 		Return([][]tokens.TokenTransfer{{t10, t12}}).
 		Maybe()
 
-	// For simplicity, we can have the SaleDetector return an empty classification for each TX
 	mockSalesDetector.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
 		Return(map[int]tokens.TransferType{
 			0: tokens.SEND,
@@ -193,7 +196,9 @@ func testWatchTransfersSimplePolling(t *testing.T) {
 		err := watcher.WatchTransfers(
 			[]string{"0xABCDEF"},
 			10,
-			transfersChan, latestBlockChan,
+			transfersChan,
+			latestBlockChan,
+			make(chan bool, 10),
 		)
 		assert.NoError(t, err)
 		close(doneCh)
@@ -239,12 +244,13 @@ func testWatchTransfersSubscription(t *testing.T) {
 	mockSalesDetector := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		decoder:       mockDecoder,
-		blockTracker:  blockDb,
-		salesDetector: mockSalesDetector,
-		client:        mockClient,
-		ctx:           ctx,
-		maxChunkSize:  20000,
+		decoder:          mockDecoder,
+		blockTracker:     blockDb,
+		salesDetector:    mockSalesDetector,
+		client:           mockClient,
+		ctx:              ctx,
+		maxBlocksInBatch: 20000,
+		maxLogsInBatch:   2000,
 	}
 
 	startBlock := uint64(50)
@@ -255,7 +261,7 @@ func testWatchTransfersSubscription(t *testing.T) {
 	block51Hash := block51.Hash()
 
 	block52 := makeRealisticHeader(52, block51Hash)
-
+	mockClient.On("Close").Return(nil).Once()
 	mockClient.On("HeaderByNumber", mock.Anything, (*big.Int)(nil)).
 		Return(block50, nil).
 		Maybe()
@@ -356,6 +362,7 @@ func testWatchTransfersSubscription(t *testing.T) {
 			startBlock,
 			transfersChan,
 			latestBlockChan,
+			make(chan<- bool, 10),
 		)
 		doneCh <- err
 	}()
@@ -409,11 +416,12 @@ func testReorgDetected(t *testing.T) {
 	mockSales := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		blockTracker:  mockBlockDb,
-		salesDetector: mockSales,
-		client:        mockClient,
-		ctx:           ctx,
-		maxChunkSize:  20000,
+		blockTracker:     mockBlockDb,
+		salesDetector:    mockSales,
+		client:           mockClient,
+		ctx:              ctx,
+		maxBlocksInBatch: 20000,
+		maxLogsInBatch:   2000,
 	}
 
 	safeHash := makeHash(0xFA)
@@ -437,12 +445,16 @@ func testReorgDetected(t *testing.T) {
 	mockBlockDb.On("RevertFromBlock", uint64(99)).
 		Return(nil).Once()
 
-	err := watcher.processRangeWithPartialReorg(
+	transfersChan := make(chan []tokens.TokenTransfer, 1)
+	latestBlockChan := make(chan uint64, 1)
+
+	err := watcher.processRangeAdaptive(
 		nil,
 		100,
 		100,
-		nil,
-		nil,
+		int(watcher.maxLogsInBatch),
+		transfersChan,
+		latestBlockChan,
 	)
 	if err == nil {
 		t.Fatal("Expected a reorg error, but got nil")
@@ -460,11 +472,12 @@ func testReorgDuringCheckAndHandle(t *testing.T) {
 	mockSales := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		blockTracker:  mockBlockDb,
-		salesDetector: mockSales,
-		client:        mockClient,
-		ctx:           ctx,
-		maxChunkSize:  20000,
+		blockTracker:     mockBlockDb,
+		salesDetector:    mockSales,
+		client:           mockClient,
+		ctx:              ctx,
+		maxBlocksInBatch: 20000,
+		maxLogsInBatch:   2000,
 	}
 
 	safeHash := makeHash(0x77)
@@ -512,14 +525,15 @@ func testPollingErrorAndRecovery(t *testing.T) {
 	mockSales := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		decoder:       mockDecoder,
-		blockTracker:  mockBlockDb,
-		salesDetector: mockSales,
-		client:        mockClient,
-		ctx:           ctx,
-		maxChunkSize:  20000,
+		decoder:          mockDecoder,
+		blockTracker:     mockBlockDb,
+		salesDetector:    mockSales,
+		client:           mockClient,
+		ctx:              ctx,
+		maxBlocksInBatch: 20000,
+		maxLogsInBatch:   2000,
 	}
-
+	mockClient.On("Close").Return(nil).Once()
 	mockClient.On("SubscribeNewHead", mock.Anything, mock.Anything).
 		Return(nil, errors.New("no subscription")).
 		Once()
@@ -588,6 +602,7 @@ func testPollingErrorAndRecovery(t *testing.T) {
 			1,
 			transfersChan,
 			latestBlockChan,
+			make(chan<- bool, 10),
 		)
 		doneCh <- err
 	}()
@@ -638,14 +653,16 @@ func testCancelContextMidway(t *testing.T) {
 	mockSales := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		decoder:       mockDecoder,
-		blockTracker:  mockBlockDb,
-		salesDetector: mockSales,
-		client:        mockClient,
-		ctx:           ctx,
-		maxChunkSize:  20000,
+		decoder:          mockDecoder,
+		blockTracker:     mockBlockDb,
+		salesDetector:    mockSales,
+		client:           mockClient,
+		ctx:              ctx,
+		maxBlocksInBatch: 20000,
+		maxLogsInBatch:   2000,
 	}
 
+	mockClient.On("Close").Return(nil).Once()
 	mockClient.On("HeaderByNumber", mock.Anything, mock.AnythingOfType("*big.Int")).
 		Return(makeHeader(100, makeHash(0x64)), nil).
 		Maybe()
@@ -684,6 +701,7 @@ func testCancelContextMidway(t *testing.T) {
 			1,
 			transfersChan,
 			latestBlockChan,
+			make(chan<- bool, 10),
 		)
 		doneCh <- err
 	}()
@@ -711,15 +729,17 @@ func testLargeBlockRange(t *testing.T) {
 	mockSales := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		decoder:       mockDecoder,
-		blockTracker:  mockBlockDb,
-		salesDetector: mockSales,
-		client:        mockClient,
-		ctx:           ctx,
-		maxChunkSize:  2000,
+		decoder:          mockDecoder,
+		blockTracker:     mockBlockDb,
+		salesDetector:    mockSales,
+		client:           mockClient,
+		ctx:              ctx,
+		maxBlocksInBatch: 2000,
+		maxLogsInBatch:   2000,
 	}
 
 	headerAt5000 := makeHeader(5000, makeHash(0x88))
+	mockClient.On("Close").Return(nil).Once()
 	mockClient.On("HeaderByNumber", mock.Anything, (*big.Int)(nil)).
 		Return(headerAt5000, nil).
 		Times(3)
@@ -782,6 +802,7 @@ func testLargeBlockRange(t *testing.T) {
 			1,
 			transfersChan,
 			latestBlockChan,
+			make(chan<- bool, 10),
 		)
 		doneCh <- err
 	}()
@@ -823,15 +844,17 @@ func testWatchTransfersSaleDetectionSuccess(t *testing.T) {
 	mockSales := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		decoder:       mockDecoder,
-		blockTracker:  mockBlockDb,
-		salesDetector: mockSales,
-		client:        mockClient,
-		ctx:           ctx,
-		maxChunkSize:  20000,
+		decoder:          mockDecoder,
+		blockTracker:     mockBlockDb,
+		salesDetector:    mockSales,
+		client:           mockClient,
+		ctx:              ctx,
+		maxBlocksInBatch: 20000,
+		maxLogsInBatch:   2000,
 	}
 
 	headerAt200 := makeHeader(200, makeHash(0xAA))
+	mockClient.On("Close").Return(nil).Once()
 	mockClient.
 		On("HeaderByNumber", mock.Anything, (*big.Int)(nil)).
 		Return(headerAt200, nil).
@@ -930,6 +953,7 @@ func testWatchTransfersSaleDetectionSuccess(t *testing.T) {
 			100,
 			transfersChan,
 			latestBlockChan,
+			make(chan<- bool, 10),
 		)
 		doneCh <- err
 	}()
@@ -974,15 +998,17 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 	mockSales := mocks.NewSalesDetector(t)
 
 	watcher := &DefaultTokensTransfersWatcher{
-		decoder:       mockDecoder,
-		blockTracker:  mockBlockDb,
-		salesDetector: mockSales,
-		client:        mockClient,
-		ctx:           ctx,
-		maxChunkSize:  20000,
+		decoder:          mockDecoder,
+		blockTracker:     mockBlockDb,
+		salesDetector:    mockSales,
+		client:           mockClient,
+		ctx:              ctx,
+		maxBlocksInBatch: 20000,
+		maxLogsInBatch:   2000,
 	}
 
 	headerAt300 := makeHeader(300, makeHash(0x33))
+	mockClient.On("Close").Return(nil).Once()
 	mockClient.
 		On("HeaderByNumber", mock.Anything, (*big.Int)(nil)).
 		Return(headerAt300, nil).
@@ -1053,6 +1079,7 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 			200,
 			transfersChan,
 			latestBlockChan,
+			make(chan<- bool, 10),
 		)
 		doneCh <- err
 	}()
@@ -1084,4 +1111,86 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("WatchTransfers did not stop after context cancel")
 	}
+}
+
+func testAdaptiveFetch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockClient := mocks.NewEthClient(t)
+	blockDb := NewInMemoryBlockHashDb()
+	decoder := NewDefaultEthTransactionLogsDecoder()
+	salesDetector := NewDefaultSalesDetector(mockClient)
+
+	watcher := &DefaultTokensTransfersWatcher{
+		ctx:              ctx,
+		client:           mockClient,
+		decoder:          decoder,
+		blockTracker:     blockDb,
+		salesDetector:    salesDetector,
+		maxBlocksInBatch: 100,
+		maxLogsInBatch:   2000,
+	}
+
+	mockClient.On("FilterLogs", mock.Anything, mock.AnythingOfType("ethereum.FilterQuery")).
+		Return(func(_ context.Context, fq ethereum.FilterQuery) []types.Log {
+			from, to := fq.FromBlock.Uint64(), fq.ToBlock.Uint64()
+			numBlocks := to - from + 1
+			if numBlocks > 5 {
+				overLimitLogs := make([]types.Log, 2100)
+				for i := range overLimitLogs {
+					overLimitLogs[i].BlockNumber = 123
+				}
+				return overLimitLogs
+			}
+			underLimitLogs := make([]types.Log, 100)
+			for i := range underLimitLogs {
+				underLimitLogs[i].BlockNumber = 123
+			}
+			return underLimitLogs
+		}, nil).
+		Maybe()
+
+	transfersChan := make(chan []tokens.TokenTransfer, 10000)
+	latestBlockChan := make(chan uint64, 10000)
+
+	doneCh := make(chan error, 1)
+	go func() {
+		err := watcher.processRangeAdaptive(
+			nil,
+			100,
+			200,
+			int(watcher.maxLogsInBatch),
+			transfersChan,
+			latestBlockChan,
+		)
+		doneCh <- err
+	}()
+
+	var totalLogs int
+	var finalBlock uint64
+
+loop:
+	for {
+		select {
+		case err := <-doneCh:
+			if err != nil {
+				t.Fatalf("processRangeAdaptive failed unexpectedly: %v", err)
+			}
+			break loop
+
+		case xfers := <-transfersChan:
+			totalLogs += len(xfers)
+
+		case blk := <-latestBlockChan:
+			finalBlock = blk
+
+		case <-time.After(2 * time.Second):
+			t.Fatal("Timed out waiting for adaptive fetch to finish.")
+		}
+	}
+
+	assert.LessOrEqual(t, finalBlock, uint64(200), "Final block may be 200 if the last sub-chunk is within threshold")
+
+	assert.LessOrEqual(t, totalLogs, 2000, "Should never exceed the log threshold in a single chunk")
 }
