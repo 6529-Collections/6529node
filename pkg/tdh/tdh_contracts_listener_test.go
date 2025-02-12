@@ -176,7 +176,7 @@ func TestTdhContractsListener_Listen_ErrorOnWatchTransfers(t *testing.T) {
 	mTransfersWatcher.AssertExpectations(t)
 }
 
-func TestTdhContractsListener_Listen_HandleErrorDoesNotStopLoop(t *testing.T) {
+func TestTdhContractsListener_Listen_HandleErrorStopsLoop(t *testing.T) {
 	zap.ReplaceGlobals(zap.NewNop())
 
 	mIdxTracker := new(mocks.TdhIdxTrackerDb)
@@ -198,8 +198,8 @@ func TestTdhContractsListener_Listen_HandleErrorDoesNotStopLoop(t *testing.T) {
 			nftChan := args.Get(2).(chan<- []tokens.TokenTransfer)
 			lbChan := args.Get(3).(chan<- uint64)
 
-			nftChan <- []tokens.TokenTransfer{{From: "0xBAD"}}
-			nftChan <- []tokens.TokenTransfer{{From: "0xGOOD"}}
+			nftChan <- []tokens.TokenTransfer{{From: "0xBAD"}} // Should trigger error and stop
+			nftChan <- []tokens.TokenTransfer{{From: "0xGOOD"}} // Should never be processed
 
 			close(nftChan)
 			close(lbChan)
@@ -208,8 +208,10 @@ func TestTdhContractsListener_Listen_HandleErrorDoesNotStopLoop(t *testing.T) {
 
 	mTransfersAction.On("Handle", []tokens.TokenTransfer{{From: "0xBAD"}}).
 		Return(errors.New("some handle error")).Once()
+
+	// Ensure Handle is NEVER called for 0xGOOD
 	mTransfersAction.On("Handle", []tokens.TokenTransfer{{From: "0xGOOD"}}).
-		Return(nil).Once()
+		Return(nil).Maybe() // This should not happen
 
 	listener := TdhContractsListener{
 		transfersWatcher:        mTransfersWatcher,
@@ -218,11 +220,13 @@ func TestTdhContractsListener_Listen_HandleErrorDoesNotStopLoop(t *testing.T) {
 	}
 
 	err := listener.listen(make(chan bool))
-	assert.NoError(t, err, "Listen should not immediately fail")
 
-	time.Sleep(100 * time.Millisecond)
+	// Expect an error because Handle() for 0xBAD failed
+	assert.Error(t, err, "Listen should fail if Handle fails")
 
-	mTransfersAction.AssertExpectations(t)
+	// Ensure Handle() for 0xGOOD was never called
+	mTransfersAction.AssertNotCalled(t, "Handle", []tokens.TokenTransfer{{From: "0xGOOD"}})
+
 	mIdxTracker.AssertExpectations(t)
 	mTransfersWatcher.AssertExpectations(t)
 }

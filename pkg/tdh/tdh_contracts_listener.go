@@ -18,15 +18,19 @@ type TdhContractsListener struct {
 
 func (client TdhContractsListener) listen(tipReachedChan chan<- bool) error {
 	nftActionsChan := make(chan []tokens.TokenTransfer)
+	errChan := make(chan error, 1) // Buffered to prevent goroutine leaks
+
 	go func() {
 		for batch := range nftActionsChan {
 			err := client.transfersReceivedAction.Handle(batch)
 			if err != nil {
 				zap.L().Error("Error handling transfers", zap.Error(err))
-				panic(err)
+				errChan <- err // Send error to main function
+				return         // Stop further processing
 			}
 		}
 	}()
+
 	startBlock, err := client.progressTracker.GetProgress()
 	if err != nil {
 		return err
@@ -46,17 +50,30 @@ func (client TdhContractsListener) listen(tipReachedChan chan<- bool) error {
 			}
 		}
 	}()
-	return client.transfersWatcher.WatchTransfers(
-		[]string{
-			constants.MEMES_CONTRACT,
-			constants.GRADIENTS_CONTRACT,
-			constants.NEXTGEN_CONTRACT,
-		},
-		startBlock,
-		nftActionsChan,
-		latestBlockChannel,
-		tipReachedChan,
-	)
+	
+	// Start transfers watching in a separate goroutine
+	done := make(chan error, 1)
+	go func() {
+		done <- client.transfersWatcher.WatchTransfers(
+			[]string{
+				constants.MEMES_CONTRACT,
+				constants.GRADIENTS_CONTRACT,
+				constants.NEXTGEN_CONTRACT,
+			},
+			startBlock,
+			nftActionsChan,
+			latestBlockChannel,
+			tipReachedChan,
+		)
+	}()
+
+	// Wait for any error from errChan or done
+	select {
+	case err := <-errChan:
+		return err
+	case err := <-done:
+		return err
+	}
 }
 
 func BlockUntilOnTipAndKeepListeningAsync(badger *badger.DB, ctx context.Context) error {

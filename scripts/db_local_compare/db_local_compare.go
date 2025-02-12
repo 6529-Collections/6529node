@@ -11,6 +11,7 @@ import (
 
 	"github.com/6529-Collections/6529node/pkg/constants"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
+
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/dgraph-io/badger/v4"
@@ -19,13 +20,42 @@ import (
 // actionsReceivedCheckpointKey holds the key used for storing the checkpoint in Badger.
 const actionsReceivedCheckpointKey = "tdh:actionsReceivedCheckpoint"
 
-// TxKey represents the (transactionHash, from, to, contract, tokenId) 5-tuple.
+// deriveSQLiteType derives a TransferType from the given row data (fromAddr, toAddr, value).
+func deriveSQLiteType(fromAddr, toAddr string, value float64) tokens.TransferType {
+	switch {
+	case fromAddr == constants.NULL_ADDRESS:
+		// from = null/0x0
+		if value > 0 {
+			return tokens.MINT
+		} else {
+			return tokens.AIRDROP
+		}
+	case toAddr == constants.NULL_ADDRESS || toAddr == constants.DEAD_ADDRESS:
+		// to = null/0x0 => burn
+		return tokens.BURN
+	case value > 0:
+		// normal transfer with value => sale
+		return tokens.SALE
+	default:
+		// normal transfer with no value => send
+		return tokens.SEND
+	}
+}
+
+// TxKey identifies a transfer by TxHash, From, To, Contract, and TokenID.
 type TxKey struct {
 	TxHash   string
 	From     string
 	To       string
 	Contract string
 	TokenID  string
+}
+
+// mismatch keeps track of where Badger's TransferType differs from SQLite's derived type.
+type mismatch struct {
+	Key         TxKey
+	BadgerType  tokens.TransferType
+	SQLiteType  tokens.TransferType
 }
 
 func main() {
@@ -40,15 +70,18 @@ func main() {
 	// a) Open Badger in read-only mode
 	// ------------------------------------------------------------------------
 	const dbPath = "./db"
-	db, err := badger.Open(badger.DefaultOptions(dbPath).WithReadOnly(true))
+	db, err := badger.Open(
+		badger.DefaultOptions(dbPath).
+			WithReadOnly(true).
+			WithLogger(nil),
+	)
 	if err != nil {
 		log.Fatalf("Failed to open Badger DB: %v", err)
 	}
 	defer db.Close()
 
 	// ------------------------------------------------------------------------
-	// b) Get the checkpoint index from Badger
-	//    We expect a string in the format "blockNumber:transactionIndex:logIndex".
+	// b) Get the checkpoint index from Badger (blockNumber:transactionIndex:logIndex)
 	// ------------------------------------------------------------------------
 	var checkpoint string
 	err = db.View(func(txn *badger.Txn) error {
@@ -56,7 +89,6 @@ func main() {
 		if err != nil {
 			return err
 		}
-
 		val, err := item.ValueCopy(nil)
 		if err != nil {
 			return err
@@ -68,28 +100,22 @@ func main() {
 		log.Fatalf("Failed to retrieve checkpoint: %v", err)
 	}
 
-	// Parse the checkpoint string to extract the block number.
 	parts := strings.Split(checkpoint, ":")
 	if len(parts) != 3 {
-		log.Fatalf("Unexpected checkpoint format (%q). Expected 'block:txIndex:logIndex'.", checkpoint)
+		log.Fatalf("Unexpected checkpoint format %q (expected block:txIndex:logIndex)", checkpoint)
 	}
 	blockNumberStr := parts[0]
 	cutoffBlockNumber, err := strconv.ParseUint(blockNumberStr, 10, 64)
 	if err != nil {
 		log.Fatalf("Failed to parse block number from checkpoint: %v", err)
 	}
-
 	fmt.Printf("Checkpoint found: %s (blockNumber=%d)\n", checkpoint, cutoffBlockNumber)
 
 	// ------------------------------------------------------------------------
-	// c) Retrieve (TxHash, From, To, Contract, TokenID) for blockNumber < cutoff from Badger
-	//
-	// Keys look like:
-	//   "tdh:transfer:{blockNumber}:{txIndex}:{logIndex}:{txHash}:{contract}:{tokenID}"
-	//
-	// We'll unmarshal the JSON (tokens.TokenTransfer) to get from/to/contract/tokenID.
+	// c) Retrieve Badger transfers (< cutoffBlockNumber)
+	//    storing them in badgerTransfers[TxKey] = TransferType
 	// ------------------------------------------------------------------------
-	badgerTransfers := make(map[TxKey]struct{})
+	badgerTransfers := make(map[TxKey]tokens.TransferType)
 
 	err = db.View(func(txn *badger.Txn) error {
 		prefix := []byte("tdh:transfer:")
@@ -103,46 +129,40 @@ func main() {
 			key := item.Key()
 			keyStr := string(key)
 
-			// Key format = tdh:transfer:0000000001:00001:00001:0xHASH:contract:tokenId
+			// Key format: tdh:transfer:0000000001:00001:00001:0xHASH:contract:tokenId
 			keyParts := strings.Split(keyStr, ":")
 			if len(keyParts) < 7 {
-				// Not a well-formed transfer key, skip
 				continue
 			}
-
-			// Extract blockNumber from key
 			bnStr := keyParts[2]
 			bn, parseErr := strconv.ParseUint(bnStr, 10, 64)
 			if parseErr != nil {
-				log.Printf("Failed to parse blockNumber from key %s: %v", keyStr, parseErr)
+				log.Printf("Failed to parse blockNumber from key=%s: %v", keyStr, parseErr)
 				continue
 			}
-
-			// We only care about transfers with blockNumber < cutoffBlockNumber
 			if bn >= cutoffBlockNumber {
-				// Because of zero-padding, once bn >= cutoffBlockNumber,
-				// all subsequent keys are also >= that number. Break.
+				// Because of zero-padding, all subsequent keys also >= cutoff
 				break
 			}
 
 			errVal := item.Value(func(val []byte) error {
-				var transfer tokens.TokenTransfer
-				if errJSON := json.Unmarshal(val, &transfer); errJSON != nil {
+				var tt tokens.TokenTransfer
+				if errJSON := json.Unmarshal(val, &tt); errJSON != nil {
 					return fmt.Errorf("unmarshal error: %w", errJSON)
 				}
+				// Build the TxKey
 				txKey := TxKey{
-					TxHash:   strings.ToLower(transfer.TxHash),
-					From:     strings.ToLower(transfer.From),
-					To:       strings.ToLower(transfer.To),
-					Contract: strings.ToLower(transfer.Contract),
-					TokenID:  strings.ToLower(transfer.TokenID),
+					TxHash:   strings.ToLower(tt.TxHash),
+					From:     strings.ToLower(tt.From),
+					To:       strings.ToLower(tt.To),
+					Contract: strings.ToLower(tt.Contract),
+					TokenID:  strings.ToLower(tt.TokenID),
 				}
-				badgerTransfers[txKey] = struct{}{}
+				badgerTransfers[txKey] = tt.Type
 				return nil
 			})
 			if errVal != nil {
 				log.Printf("Warning: can't read JSON for key=%s, err=%v", keyStr, errVal)
-				// continue anyway
 			}
 		}
 		return nil
@@ -151,8 +171,7 @@ func main() {
 		log.Fatalf("Failed to iterate Badger for transfers: %v", err)
 	}
 
-	fmt.Printf("Found %d (txHash, from, to, contract, tokenId) combos in Badger below block %d\n",
-		len(badgerTransfers), cutoffBlockNumber)
+	fmt.Printf("Found %d transfers in Badger below block %d\n", len(badgerTransfers), cutoffBlockNumber)
 
 	// ------------------------------------------------------------------------
 	// d) Connect to the SQLite DB
@@ -164,28 +183,34 @@ func main() {
 	defer dbSQL.Close()
 
 	// ------------------------------------------------------------------------
-	// e) Retrieve (transaction, from_address, to_address, contract, token_id) from SQLite
-	//    for block < cutoff, only for the specified TDH contracts.
+	// e) Retrieve from SQLite: transaction, from_address, to_address, contract, token_id, value
+	//    Only for certain contracts, block < cutoff.
+	//    Then we derive the TransferType from (from, to, value).
 	// ------------------------------------------------------------------------
 	tdhContracts := []string{
 		constants.MEMES_CONTRACT,
 		constants.NEXTGEN_CONTRACT,
 		constants.GRADIENTS_CONTRACT,
 	}
+	ph := strings.Repeat("?,", len(tdhContracts))
+	ph = ph[:len(ph)-1] // remove trailing comma
 
-	placeholders := strings.Repeat("?,", len(tdhContracts))
-	placeholders = placeholders[:len(placeholders)-1]
-
-	query := fmt.Sprintf(`SELECT "transaction", "from_address", "to_address", "contract", "token_id"
-                          FROM transactions
-                          WHERE contract IN (%s)
-                            AND block < ?`,
-		placeholders,
-	)
+	query := fmt.Sprintf(`
+		SELECT
+			"transaction",
+			"from_address",
+			"to_address",
+			"contract",
+			"token_id",
+			"value"
+		FROM transactions
+		WHERE contract IN (%s)
+		  AND block < ?
+	`, ph)
 
 	args := make([]interface{}, len(tdhContracts)+1)
-	for i, v := range tdhContracts {
-		args[i] = v
+	for i, c := range tdhContracts {
+		args[i] = c
 	}
 	args[len(tdhContracts)] = cutoffBlockNumber
 
@@ -195,16 +220,19 @@ func main() {
 	}
 	defer rows.Close()
 
-	sqliteTransfers := make(map[TxKey]struct{})
+	sqliteTransfers := make(map[TxKey]tokens.TransferType)
+
 	for rows.Next() {
 		var (
-			txHash    string
-			fromAddr  string
-			toAddr    string
-			contract  string
-			tokenID   string
+			txHash   string
+			fromAddr string
+			toAddr   string
+			contract string
+			tokenID  string
+			value    float64
 		)
-		if err := rows.Scan(&txHash, &fromAddr, &toAddr, &contract, &tokenID); err != nil {
+
+		if err := rows.Scan(&txHash, &fromAddr, &toAddr, &contract, &tokenID, &value); err != nil {
 			log.Fatalf("Failed to scan row: %v", err)
 		}
 
@@ -215,53 +243,79 @@ func main() {
 			Contract: strings.ToLower(contract),
 			TokenID:  strings.ToLower(tokenID),
 		}
-		sqliteTransfers[txKey] = struct{}{}
+		derivedType := deriveSQLiteType(txKey.From, txKey.To, value)
+		sqliteTransfers[txKey] = derivedType
 	}
+
 	if err := rows.Err(); err != nil {
 		log.Fatalf("Row iteration error: %v", err)
 	}
 
-	fmt.Printf("Found %d (txHash, from, to, contract, tokenId) combos in SQLite below block %d\n",
-		len(sqliteTransfers), cutoffBlockNumber)
+	fmt.Printf("Found %d transfers in SQLite below block %d\n", len(sqliteTransfers), cutoffBlockNumber)
 
 	// ------------------------------------------------------------------------
-	// f) Compare the two sets by TxKey
+	// f) Compare the sets
+	//    1) Missing in SQLite vs. missing in Badger
+	//    2) Type mismatches for transfers that exist in both.
 	// ------------------------------------------------------------------------
+
 	var missingInSQLite []TxKey
 	var missingInBadger []TxKey
+	var mismatches []mismatch
 
-	// Items in BadgerTransfers but not in SqliteTransfers
-	for txKey := range badgerTransfers {
-		if _, exists := sqliteTransfers[txKey]; !exists {
-			missingInSQLite = append(missingInSQLite, txKey)
+	// We’ll collect keys that appear in both sets so we can check type mismatches
+	for key, bType := range badgerTransfers {
+		sType, inSQLite := sqliteTransfers[key]
+		if !inSQLite {
+			// Key is not in sqlite
+			missingInSQLite = append(missingInSQLite, key)
+		} else {
+			// Key is in both => compare types
+			if bType != sType {
+				mismatches = append(mismatches, mismatch{Key: key, BadgerType: bType, SQLiteType: sType})
+			}
+		}
+	}
+	// Now look for those in SQLite but not in Badger
+	for key := range sqliteTransfers {
+		if _, inBadger := badgerTransfers[key]; !inBadger {
+			missingInBadger = append(missingInBadger, key)
 		}
 	}
 
-	// Items in SqliteTransfers but not in BadgerTransfers
-	for txKey := range sqliteTransfers {
-		if _, exists := badgerTransfers[txKey]; !exists {
-			missingInBadger = append(missingInBadger, txKey)
-		}
-	}
+	fmt.Println("\n======= RESULTS =======")
 
-	// Print differences
+	// (1) Missing in SQLite
 	if len(missingInSQLite) > 0 {
-		fmt.Println("\n❌ These (txHash, from, to, contract, tokenId) combos are in Badger but missing in SQLite:")
-		for _, txKey := range missingInSQLite {
+		fmt.Printf("\n❌ Present in Badger but missing in SQLite (x%d):\n", len(missingInSQLite))
+		for _, key := range missingInSQLite {
 			fmt.Printf("   %s | from=%s => to=%s | contract=%s | tokenId=%s\n",
-				txKey.TxHash, txKey.From, txKey.To, txKey.Contract, txKey.TokenID)
+				key.TxHash, key.From, key.To, key.Contract, key.TokenID)
 		}
 	} else {
-		fmt.Println("✅ All (txHash, from, to, contract, tokenId) in Badger are also present in SQLite")
+		fmt.Println("\n✅ All Badger transfers are present in SQLite")
 	}
 
+	// (2) Missing in Badger
 	if len(missingInBadger) > 0 {
-		fmt.Println("\n❌ These (txHash, from, to, contract, tokenId) combos are in SQLite but missing in Badger:")
-		for _, txKey := range missingInBadger {
+		fmt.Printf("\n❌ Present in SQLite but missing in Badger (x%d):\n", len(missingInBadger))
+		for _, key := range missingInBadger {
 			fmt.Printf("   %s | from=%s => to=%s | contract=%s | tokenId=%s\n",
-				txKey.TxHash, txKey.From, txKey.To, txKey.Contract, txKey.TokenID)
+				key.TxHash, key.From, key.To, key.Contract, key.TokenID)
 		}
 	} else {
-		fmt.Println("\n✅ All (txHash, from, to, contract, tokenId) in SQLite are also present in Badger")
+		fmt.Println("\n✅ All SQLite transfers are present in Badger")
+	}
+
+	// (3) Type Mismatches
+	if len(mismatches) > 0 {
+		fmt.Printf("\n❌ Transfer Type Mismatches (x%d)\n", len(mismatches))
+		// for _, mm := range mismatches {
+		// 	fmt.Printf("\n\nTRX Hash: %s\n", mm.Key.TxHash)
+		// 	fmt.Printf("Badger: %s	|	SQLite: %s\n",
+		// 		mm.BadgerType, mm.SQLiteType)
+		// }
+	} else {
+		fmt.Println("\n✅ No type mismatches between Badger and SQLite for the common TxKeys.")
 	}
 }

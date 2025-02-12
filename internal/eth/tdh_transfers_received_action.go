@@ -48,7 +48,7 @@ func NewTdhTransfersReceivedActionImpl(db *badger.DB, ctx context.Context) *Defa
 	ownerDb := NewOwnerDb()
 	nftDb := NewNFTDb()
 	
-	db.Update(func(txn *badger.Txn) error {
+	db.View(func(txn *badger.Txn) error {
 		allTransfers, err := transferDb.GetAllTransfers(txn)
 		if err != nil {
 			return fmt.Errorf("failed to get all transfers: %w", err)
@@ -74,6 +74,10 @@ func NewTdhTransfersReceivedActionImpl(db *badger.DB, ctx context.Context) *Defa
 		sort.Slice(allTransfers, func(i, j int) bool {
 			return allTransfers[i].BlockNumber < allTransfers[j].BlockNumber
 		})
+		if len(allTransfers) == 0 {
+			zap.L().Info("No transfers found")
+			return nil
+		}
 		latestTransfer := allTransfers[len(allTransfers)-1]
 		zap.L().Info("Latest block", zap.Uint64("block", latestTransfer.BlockNumber), zap.Uint64("txIndex", latestTransfer.TransactionIndex), zap.Uint64("logIndex", latestTransfer.LogIndex))
 		
