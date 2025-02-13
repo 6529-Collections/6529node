@@ -237,3 +237,119 @@ func TestOwnerDb_GetAllOwners(t *testing.T) {
 	})
 	require.NoError(t, err)
 }
+
+func TestResetOwners_Error(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	db.Close() // Force an error
+
+	ownerDb := &OwnerDbImpl{}
+	err := ownerDb.ResetOwners(db)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to drop prefix")
+}
+
+func TestUpdateOwnership_GetBalanceError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	txn := db.NewTransaction(true)
+	defer txn.Discard()
+
+	ownerDb := &OwnerDbImpl{}
+	err := ownerDb.UpdateOwnership(txn, "0xFrom", "0xTo", "0xContract", "1", 100)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "transfer error: insufficient balance")
+}
+
+func TestUpdateOwnership_DeleteKeyError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	txn := db.NewTransaction(true)
+	defer txn.Discard()
+
+	ownerDb := &OwnerDbImpl{}
+	_ = ownerDb.setBalance(txn, "0xFrom", "0xContract", "1", 100) // Set initial balance
+
+	// Close DB to force delete failure
+	db.Close()
+	err := ownerDb.UpdateOwnership(txn, "0xFrom", "0xTo", "0xContract", "1", 100)
+
+	require.Error(t, err)
+}
+
+func TestUpdateOwnership_SetBalanceError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	txn := db.NewTransaction(true)
+	defer txn.Discard()
+
+	ownerDb := &OwnerDbImpl{}
+
+	// Close DB to force Set error
+	db.Close()
+	err := ownerDb.UpdateOwnership(txn, "0xNull", "0xTo", "0xContract", "1", 100)
+
+	require.Error(t, err)
+}
+
+func TestGetBalance_KeyRetrievalError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	db.Close() // Force an error
+
+	txn := db.NewTransaction(false)
+	defer txn.Discard()
+
+	ownerDb := &OwnerDbImpl{}
+	_, err := ownerDb.GetBalance(txn, "0xOwner", "0xContract", "1")
+
+	require.Error(t, err)
+}
+
+func TestGetBalance_UnmarshalError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	err := db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte("tdh:owner:0xowner:0xcontract:1"), []byte("invalid_json"))
+	})
+	require.NoError(t, err)
+
+	txn := db.NewTransaction(false)
+	defer txn.Discard()
+
+	ownerDb := &OwnerDbImpl{}
+	_, err = ownerDb.GetBalance(txn, "0xOwner", "0xContract", "1")
+
+	require.Error(t, err)
+}
+
+func TestGetOwnersByNft_UnmarshalError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	err := db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte("tdh:nftowners:0xcontract:1:0xowner"), []byte("invalid_json"))
+	})
+	require.NoError(t, err)
+
+	txn := db.NewTransaction(false)
+	defer txn.Discard()
+
+	ownerDb := &OwnerDbImpl{}
+	_, err = ownerDb.GetOwnersByNft(txn, "0xContract", "1")
+
+	require.Error(t, err)
+}
+
+func TestGetAllOwners_UnmarshalError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	err := db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte("tdh:owner:0xOwner:0xContract:1"), []byte("invalid_json"))
+	})
+	require.NoError(t, err)
+
+	txn := db.NewTransaction(false)
+	defer txn.Discard()
+
+	ownerDb := &OwnerDbImpl{}
+	_, err = ownerDb.GetAllOwners(txn)
+
+	require.Error(t, err)
+}
