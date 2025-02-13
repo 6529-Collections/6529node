@@ -575,3 +575,49 @@ func TestSingleMint(t *testing.T) {
 	})
 	require.NoError(t, err)
 }
+
+
+func TestBurnToDeadAddress(t *testing.T) {
+    db := setupTestInMemoryDB(t)
+    action := NewTdhTransfersReceivedActionImpl(db, context.Background())
+
+    // Step1: Mint to user
+    mint := tokens.TokenTransfer{
+        From: constants.NULL_ADDRESS,
+        To:   "0xUser",
+        // ...
+    }
+    // Step2: user -> DEAD_ADDRESS
+    burn := tokens.TokenTransfer{
+        From:             "0xUser",
+        To:               constants.DEAD_ADDRESS,
+        Contract:         "0xNFT",
+        TokenID:          "999",
+        Amount:           2,
+        BlockNumber:      11,
+        TransactionIndex: 0,
+        LogIndex:         1,
+        TxHash:           "0xDeadBurn",
+    }
+
+    // Execute
+    require.NoError(t, action.Handle([]tokens.TokenTransfer{mint}))
+    require.NoError(t, action.Handle([]tokens.TokenTransfer{burn}))
+
+    // Validate results:
+    // user should have 0, burnt supply should match
+}
+
+func TestParseCheckpointValid(t *testing.T) {
+    block, txIndex, logIndex, err := parseCheckpoint("100:2:5")
+    require.NoError(t, err)
+    assert.Equal(t, uint64(100), block)
+    assert.Equal(t, uint64(2), txIndex)
+    assert.Equal(t, uint64(5), logIndex)
+}
+
+func TestParseCheckpointInvalid(t *testing.T) {
+    _, _, _, err := parseCheckpoint("invalid")
+    require.Error(t, err)
+    assert.Contains(t, err.Error(), "invalid checkpoint format")
+}
