@@ -1,5 +1,6 @@
 ignore:
   - "cmd/node/main.go"
+  - "cmd/tdh_calculation/main.go"
   - "internal/eth/mocks"
   - "internal/network/mocks"
   - "scripts/db_local_compare"
