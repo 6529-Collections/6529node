@@ -27,3 +27,8 @@ type TokenTransfer struct {
 	Amount           int64
 	Type             TransferType
 }
+
+type TokenTransferBatch struct {
+	Transfers   []TokenTransfer
+	BlockNumber uint64
+}

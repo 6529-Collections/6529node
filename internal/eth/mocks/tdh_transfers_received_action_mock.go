@@ -13,7 +13,7 @@ type TdhTransfersReceivedAction struct {
 }
 
 // Handle provides a mock function with given fields: transfers
-func (_m *TdhTransfersReceivedAction) Handle(transfers []tokens.TokenTransfer) error {
+func (_m *TdhTransfersReceivedAction) Handle(transfers tokens.TokenTransferBatch) error {
 	ret := _m.Called(transfers)
 
 	if len(ret) == 0 {
@@ -21,7 +21,7 @@ func (_m *TdhTransfersReceivedAction) Handle(transfers []tokens.TokenTransfer) e
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func([]tokens.TokenTransfer) error); ok {
+	if rf, ok := ret.Get(0).(func(tokens.TokenTransferBatch) error); ok {
 		r0 = rf(transfers)
 	} else {
 		r0 = ret.Error(0)
