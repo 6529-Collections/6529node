@@ -24,8 +24,6 @@ type DefaultSalesDetector struct {
 	receiptCache map[common.Hash]*types.Receipt
 }
 
-const openseaAddress = "0x00000000000000ADc04C56Bf30aC9d3c0aAF14dC"
-
 var blurSignature = common.HexToHash("0x7dc5c0699ac8dd5250cbe368a2fc3b4a2daadb120ad07f6cccea29f83482686e")
 var wethTokenAddress = common.HexToAddress("0xC02aaa39b223Fe8D0a0e5C4F27eAD9083C756Cc2")
 var erc20TransferSig = common.HexToHash("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")
@@ -1010,12 +1008,9 @@ func (d *DefaultSalesDetector) hasAnySaleIndicators(
 		}
 
 		if signatureTopic == seaportFullfilledSig {
-			if !sameAddress(lg.Address, common.HexToAddress(openseaAddress)) {
-				continue
-			}
 			fulfilled, err := decodeSeaportOrderFulfilled(lg)
 			if err != nil {
-				zap.L().Warn("Seaport parse error", zap.Error(err), zap.String("txHash", lg.TxHash.Hex()))
+				zap.L().Warn("Seaport parse e0x00000000000000ADc04C56Bf30aC9d3c0aAF14dCrror", zap.Error(err), zap.String("txHash", lg.TxHash.Hex()))
 				continue
 			}
 

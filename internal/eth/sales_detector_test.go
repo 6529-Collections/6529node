@@ -150,7 +150,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 		require.NoError(t, err, "should pack minimal OrderFulfilled event data")
 
 		seaportLog := &types.Log{
-			Address: common.HexToAddress(openseaAddress),
+			Address: common.HexToAddress("0x00000000000000ADc04C56Bf30aC9d3c0aAF14dC"),
 			Topics: []common.Hash{
 				seaportFullfilledSig,
 				addressToTopic(common.HexToAddress("0xOfferer")),
