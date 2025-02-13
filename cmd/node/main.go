@@ -8,7 +8,7 @@ import (
 
 	"github.com/6529-Collections/6529node/internal/config"
 	"github.com/6529-Collections/6529node/internal/db"
-	"github.com/6529-Collections/6529node/internal/network/creator"
+	network_creator "github.com/6529-Collections/6529node/internal/network/creator"
 	"github.com/6529-Collections/6529node/pkg/tdh"
 	"go.uber.org/zap"
 )
@@ -54,7 +54,6 @@ func main() {
 		}
 	}()
 
-	
 	if err := tdh.BlockUntilOnTipAndKeepListeningAsync(badger, ctx); err != nil {
 		zap.L().Error("Failed to listen on TDH contracts", zap.Error(err))
 		cancel()
