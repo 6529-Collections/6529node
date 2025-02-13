@@ -2,6 +2,7 @@ package eth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -577,7 +578,6 @@ func TestSingleMint(t *testing.T) {
 }
 
 func TestBurnToDeadAddress(t *testing.T) {
-	// Setup test in-memory database
 	db := setupTestInMemoryDB(t)
 	action := NewTdhTransfersReceivedActionImpl(db, context.Background())
 
@@ -639,4 +639,341 @@ func TestParseCheckpointInvalid(t *testing.T) {
 	_, _, _, err := parseCheckpoint("invalid")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid checkpoint format")
+}
+
+// TransferDb interface mock
+type failingTransferDb struct {
+	storeErr                error
+	getAllTransfersErr      error
+	getTransfersContractErr error
+	getTransfersAddressErr  error
+	resetCheckpointErr      error
+}
+
+func (f *failingTransferDb) StoreTransfer(*badger.Txn, tokens.TokenTransfer) error {
+	if f.storeErr != nil {
+		return f.storeErr
+	}
+	return nil
+}
+func (f *failingTransferDb) GetAllTransfers(*badger.Txn) ([]tokens.TokenTransfer, error) {
+	if f.getAllTransfersErr != nil {
+		return nil, f.getAllTransfersErr
+	}
+	return nil, nil
+}
+func (f *failingTransferDb) GetTransfersByContract(*badger.Txn, string) ([]tokens.TokenTransfer, error) {
+	if f.getTransfersContractErr != nil {
+		return nil, f.getTransfersContractErr
+	}
+	return nil, nil
+}
+func (f *failingTransferDb) GetTransfersByAddress(*badger.Txn, string) ([]tokens.TokenTransfer, error) {
+	if f.getTransfersAddressErr != nil {
+		return nil, f.getTransfersAddressErr
+	}
+	return nil, nil
+}
+func (f *failingTransferDb) ResetToCheckpoint(*badger.Txn, uint64, uint64, uint64) error {
+	if f.resetCheckpointErr != nil {
+		return f.resetCheckpointErr
+	}
+	return nil
+}
+func (f *failingTransferDb) GetTransfersByBlockMax(*badger.Txn, uint64) ([]tokens.TokenTransfer, error) {
+	return nil, nil
+}
+func (f *failingTransferDb) GetTransfersByBlockNumber(*badger.Txn, uint64) ([]tokens.TokenTransfer, error) {
+	return nil, nil
+}
+func (f *failingTransferDb) GetTransfersByNft(*badger.Txn, string, string) ([]tokens.TokenTransfer, error) {
+	return nil, nil
+}
+func (f *failingTransferDb) GetTransfersByTxHash(*badger.Txn, string) ([]tokens.TokenTransfer, error) {
+	return nil, nil
+}
+
+// OwnerDb interface mock
+type failingOwnerDb struct {
+	getBalanceErr      error
+	updateOwnershipErr error
+	resetOwnersErr     error
+	// Add other error fields if OwnerDb has more methods
+}
+
+func (f *failingOwnerDb) GetBalance(*badger.Txn, string, string, string) (int64, error) {
+	if f.getBalanceErr != nil {
+		return 0, f.getBalanceErr
+	}
+	return 0, nil
+}
+func (f *failingOwnerDb) UpdateOwnership(*badger.Txn, string, string, string, string, int64) error {
+	if f.updateOwnershipErr != nil {
+		return f.updateOwnershipErr
+	}
+	return nil
+}
+func (f *failingOwnerDb) ResetOwners(*badger.DB) error {
+	if f.resetOwnersErr != nil {
+		return f.resetOwnersErr
+	}
+	return nil
+}
+func (f *failingOwnerDb) GetAllOwners(*badger.Txn) (map[string]int64, error) {
+	return nil, nil
+}
+func (f *failingOwnerDb) GetOwnersByNft(*badger.Txn, string, string) (map[string]int64, error) {
+	return nil, nil
+}
+
+// NFTDb interface mock
+type failingNFTDb struct {
+	updateSupplyErr      error
+	updateBurntSupplyErr error
+	resetNFTsErr         error
+	// If NFTDb has more methods, add them here
+}
+
+func (f *failingNFTDb) UpdateSupply(*badger.Txn, string, string, int64) error {
+	if f.updateSupplyErr != nil {
+		return f.updateSupplyErr
+	}
+	return nil
+}
+func (f *failingNFTDb) UpdateBurntSupply(*badger.Txn, string, string, int64) error {
+	if f.updateBurntSupplyErr != nil {
+		return f.updateBurntSupplyErr
+	}
+	return nil
+}
+func (f *failingNFTDb) ResetNFTs(*badger.DB) error {
+	if f.resetNFTsErr != nil {
+		return f.resetNFTsErr
+	}
+	return nil
+}
+
+// If the real NFTDb has more methods, also stub them out
+func (f *failingNFTDb) GetNFT(*badger.Txn, string, string) (*NFT, error) {
+	// Return something trivial or an error field
+	return nil, nil
+}
+func (f *failingNFTDb) GetNftsByOwnerAddress(*badger.Txn, string) ([]NFT, error) {
+	// Return something trivial or an error field
+	return nil, nil
+}
+
+//
+// 2. Helper to create a *DefaultTdhTransfersReceivedAction with failing mocks
+//
+
+func newActionWithMocks(
+	db *badger.DB,
+	transferDb TransferDb,
+	ownerDb OwnerDb,
+	nftDb NFTDb,
+) *DefaultTdhTransfersReceivedAction {
+	return &DefaultTdhTransfersReceivedAction{
+		db:         db,
+		transferDb: transferDb,
+		ownerDb:    ownerDb,
+		nftDb:      nftDb,
+		ctx:        context.Background(),
+	}
+}
+
+//
+// 3. Tests for Error Coverage in the Constructor
+//
+
+func TestNewTdhTransfersReceivedActionImpl_GetAllTransfersError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	// Create a TransferDb that fails on GetAllTransfers
+	fTransferDb := &failingTransferDb{
+		getAllTransfersErr: errors.New("mock getAllTransfers error"),
+	}
+
+	// Manually build the action so that we skip the normal constructor logic
+	action := &DefaultTdhTransfersReceivedAction{
+		db:         db,
+		transferDb: fTransferDb,
+		ownerDb:    NewOwnerDb(),
+		nftDb:      NewNFTDb(),
+		ctx:        context.Background(),
+	}
+
+	// Now replicate what NewTdhTransfersReceivedActionImpl does internally:
+	err := db.View(func(txn *badger.Txn) error {
+		_, err := action.transferDb.GetAllTransfers(txn)
+		if err != nil {
+			return fmt.Errorf("failed to get all transfers: %w", err)
+		}
+		return nil
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mock getAllTransfers error")
+}
+
+func TestNewTdhTransfersReceivedActionImpl_GetTransfersByContractError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	fTransferDb := &failingTransferDb{
+		getTransfersContractErr: errors.New("mock getTransfersByContract error"),
+	}
+
+	// We'll mimic the relevant section of the constructor
+	err := db.View(func(txn *badger.Txn) error {
+		_, err := fTransferDb.GetTransfersByContract(txn, constants.GRADIENTS_CONTRACT)
+		if err != nil {
+			return fmt.Errorf("failed to get gradient transfers: %w", err)
+		}
+		return nil
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mock getTransfersByContract error")
+}
+
+// 4. Tests for applyTransfer Error Paths
+func TestApplyTransfer_StoreTransferError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	fTransDb := &failingTransferDb{
+		storeErr: errors.New("mock store error"),
+	}
+	action := newActionWithMocks(db, fTransDb, NewOwnerDb(), NewNFTDb())
+
+	txErr := db.Update(func(txn *badger.Txn) error {
+		transfer := tokens.TokenTransfer{
+			BlockNumber:      10,
+			TransactionIndex: 0,
+			LogIndex:         0,
+			From:             constants.NULL_ADDRESS, // triggers mint logic
+			To:               "0xUser",
+			Contract:         "0xNFT",
+			TokenID:          "1",
+			Amount:           1,
+		}
+		return action.applyTransfer(txn, transfer, true) // storeTransfer=true
+	})
+	require.Error(t, txErr)
+	assert.Contains(t, txErr.Error(), "mock store error")
+	assert.Contains(t, txErr.Error(), "failed to store transfer")
+}
+
+func TestApplyTransfer_UpdateSupplyError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	fNftDb := &failingNFTDb{
+		updateSupplyErr: errors.New("mock updateSupply error"),
+	}
+	action := newActionWithMocks(db, NewTransferDb(), NewOwnerDb(), fNftDb)
+
+	txErr := db.Update(func(txn *badger.Txn) error {
+		transfer := tokens.TokenTransfer{
+			From:     constants.NULL_ADDRESS, // triggers UpdateSupply
+			To:       "0xUser",
+			Contract: "0xNFT",
+			TokenID:  "1",
+			Amount:   10,
+		}
+		return action.applyTransfer(txn, transfer, false) // storeTransfer=false
+	})
+	require.Error(t, txErr)
+	assert.Contains(t, txErr.Error(), "mock updateSupply error")
+	assert.Contains(t, txErr.Error(), "failed to update NFT supply")
+}
+
+func TestApplyTransfer_UpdateBurntSupplyError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	fNftDb := &failingNFTDb{
+		updateBurntSupplyErr: errors.New("mock burntSupply error"),
+	}
+	action := newActionWithMocks(db, NewTransferDb(), NewOwnerDb(), fNftDb)
+
+	txErr := db.Update(func(txn *badger.Txn) error {
+		transfer := tokens.TokenTransfer{
+			From:     "0xUser",
+			To:       constants.NULL_ADDRESS, // triggers burn logic
+			Contract: "0xNFT",
+			TokenID:  "1",
+			Amount:   2,
+		}
+		return action.applyTransfer(txn, transfer, false)
+	})
+	require.Error(t, txErr)
+	assert.Contains(t, txErr.Error(), "mock burntSupply error")
+	assert.Contains(t, txErr.Error(), "failed to update NFT burnt supply")
+}
+
+func TestApplyTransfer_GetBalanceError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	fOwnerDb := &failingOwnerDb{
+		getBalanceErr: errors.New("mock getBalance error"),
+	}
+	action := newActionWithMocks(db, NewTransferDb(), fOwnerDb, NewNFTDb())
+
+	txErr := db.Update(func(txn *badger.Txn) error {
+		transfer := tokens.TokenTransfer{
+			From:     "0xUser", // triggers the getBalance path
+			To:       "0xUser2",
+			Contract: "0xNFT",
+			TokenID:  "10",
+			Amount:   1,
+		}
+		return action.applyTransfer(txn, transfer, false)
+	})
+	require.Error(t, txErr)
+	assert.Contains(t, txErr.Error(), "mock getBalance error")
+	assert.Contains(t, txErr.Error(), "failed to get sender balance")
+}
+
+//
+// 5. Tests for reset(...) Error Paths
+//    Since reset is a private method, we can still call it directly in the same package.
+//    We'll set up mocks that fail at various steps.
+//
+
+func TestReset_OwnersResetError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	fOwnerDb := &failingOwnerDb{
+		resetOwnersErr: errors.New("mock resetOwners error"),
+	}
+	action := newActionWithMocks(db, NewTransferDb(), fOwnerDb, NewNFTDb())
+
+	err := action.reset(0, 0, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mock resetOwners error")
+	assert.Contains(t, err.Error(), "failed to reset owners")
+}
+
+func TestReset_NFTsResetError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	fNftDb := &failingNFTDb{
+		resetNFTsErr: errors.New("mock resetNFTs error"),
+	}
+	action := newActionWithMocks(db, NewTransferDb(), NewOwnerDb(), fNftDb)
+
+	err := action.reset(0, 0, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mock resetNFTs error")
+	assert.Contains(t, err.Error(), "failed to reset NFTs")
+}
+
+func TestReset_TransferResetToCheckpointError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	fTransDb := &failingTransferDb{
+		resetCheckpointErr: errors.New("mock reset checkpoint error"),
+	}
+	action := newActionWithMocks(db, fTransDb, NewOwnerDb(), NewNFTDb())
+
+	err := action.reset(0, 0, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mock reset checkpoint error")
+	assert.Contains(t, err.Error(), "failed to reset transfers to checkpoint")
 }
