@@ -485,3 +485,93 @@ func TestDefaultTdhTransfersReceivedAction_MultipleBatches(t *testing.T) {
 	})
 	require.NoError(t, err)
 }
+
+func TestInvalidCheckpointData(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	action := NewTdhTransfersReceivedActionImpl(db, context.Background())
+	require.NotNil(t, action)
+
+	// Manually store an invalid checkpoint
+	err := db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte(actionsReceivedCheckpointKey), []byte("bad:data:here"))
+	})
+	require.NoError(t, err)
+
+	// Attempt to handle a normal set of transfers
+	transfers := []tokens.TokenTransfer{
+		{
+			From:             constants.NULL_ADDRESS,
+			To:               "0xUserABC",
+			Contract:         "0xNFT",
+			TokenID:          "999",
+			Amount:           1,
+			BlockNumber:      10,
+			TransactionIndex: 0,
+			LogIndex:         0,
+			TxHash:           "0xTest",
+		},
+	}
+
+	// This should fail because parseCheckpoint will throw an error for "bad:data:here"
+	err = action.Handle(transfers)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid checkpoint format")
+}
+
+func TestNoCheckpointKeyFound(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	// Don't set checkpoint; it's missing on purpose.
+
+	err := db.View(func(txn *badger.Txn) error {
+		val, err := getLastSavedCheckpoint(txn)
+		require.NoError(t, err)
+		assert.Equal(t, "0:0:0", string(val))
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func TestSingleMint(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	action := NewTdhTransfersReceivedActionImpl(db, context.Background())
+
+	// Just 1 mint => block=10
+	transfer := tokens.TokenTransfer{
+		From:             constants.NULL_ADDRESS,
+		To:               "0xMinter",
+		Contract:         "0xNFT",
+		TokenID:          "123",
+		Amount:           3,
+		BlockNumber:      10,
+		TransactionIndex: 1,
+		LogIndex:         0,
+		TxHash:           "0xMint",
+	}
+
+	err := action.Handle([]tokens.TokenTransfer{transfer})
+	require.NoError(t, err)
+
+	// Validate DB
+	err = db.View(func(txn *badger.Txn) error {
+		// ownership
+		ownerDb := NewOwnerDb()
+		bal, _ := ownerDb.GetBalance(txn, "0xminter", "0xnft", "123")
+		assert.Equal(t, int64(3), bal)
+
+		// supply
+		nftDb := NewNFTDb()
+		rec, err := nftDb.GetNFT(txn, "0xnft", "123")
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), rec.Supply)
+		assert.Equal(t, int64(0), rec.BurntSupply)
+
+		// checkpoint
+		item, e2 := txn.Get([]byte(actionsReceivedCheckpointKey))
+		require.NoError(t, e2)
+		cp, _ := item.ValueCopy(nil)
+		assert.Equal(t, "10:1:0", string(cp), "Should match last minted block:txIndex:logIndex")
+
+		return nil
+	})
+	require.NoError(t, err)
+}
