@@ -16,5 +16,7 @@ func setupTestInMemoryDB(t *testing.T) *badger.DB {
 	db, err := badger.Open(opts)
 	require.NoError(t, err)
 
+	t.Cleanup(func() { db.Close() })
+
 	return db
 }

@@ -2,6 +2,7 @@ package eth
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -673,4 +674,193 @@ func TestTransferDb_GetTransfersByBlockMax_CorruptedBlockNumber(t *testing.T) {
 	require.Error(t, err, "Should fail on invalid block substring")
 	assert.Contains(t, err.Error(), "ParseUint")
 	assert.Empty(t, results, "No valid results expected because an error is thrown early")
+}
+
+func TestGetTransfersByBlockMax_InvalidJSON(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	transferPrefix := "tdh:transfer:"
+
+	// Create a sample invalid JSON entry
+	blockNumber := uint64(12)
+	key := fmt.Sprintf("%s%010d:00000:00000", transferPrefix, blockNumber)
+	invalidJSON := []byte("{invalid_json}") // Simulate corrupted data
+
+	err := db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte(key), invalidJSON)
+	})
+	require.NoError(t, err)
+
+	// Now try to read it back using GetTransfersByBlockMax
+	txn := db.NewTransaction(false)
+	defer txn.Discard()
+
+	transferDB := &TransferDbImpl{}
+	_, err = transferDB.GetTransfersByBlockMax(txn, blockNumber)
+
+	// Expect an error due to JSON unmarshaling failure
+	require.Error(t, err)
+}
+
+// Test when retrieving the primary key fails
+func TestGetTransfersByContract_PrimaryKeyRetrievalError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	contract := "0xABC"
+	contractLower := strings.ToLower(contract)
+	prefix := fmt.Sprintf("%s%s:", transferByNftPrefix, contractLower)
+
+	// Simulate error by inserting an invalid value (force a failure in item.Value)
+	key := fmt.Sprintf("%s%s", prefix, "invalidEntry")
+
+	err := db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte(key), []byte{})
+	})
+	require.NoError(t, err)
+
+	txn := db.NewTransaction(false)
+	defer txn.Discard()
+
+	transferDB := &TransferDbImpl{}
+	_, err = transferDB.GetTransfersByContract(txn, contract)
+
+	// Expect an error due to invalid value retrieval
+	require.Error(t, err)
+}
+
+// Test when the primary transfer record is missing (should be skipped)
+func TestGetTransfersByContract_MissingPrimaryRecord(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	contract := "0xABC"
+	contractLower := strings.ToLower(contract)
+	prefix := fmt.Sprintf("%s%s:", transferByNftPrefix, contractLower)
+
+	// Insert a reference key, but do NOT insert the primary record
+	primaryKey := "tdh:transfer:missingEntry"
+
+	err := db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte(fmt.Sprintf("%s%s", prefix, "tokenID")), []byte(primaryKey))
+	})
+	require.NoError(t, err)
+
+	txn := db.NewTransaction(false)
+	defer txn.Discard()
+
+	transferDB := &TransferDbImpl{}
+	transfers, err := transferDB.GetTransfersByContract(txn, contract)
+
+	// Expect no error, but transfers should be empty since the primary record was missing
+	require.NoError(t, err)
+	require.Empty(t, transfers)
+}
+
+// Test JSON unmarshaling failure for the primary transfer record
+func TestGetTransfersByContract_InvalidJSON(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	contract := "0xABC"
+	contractLower := strings.ToLower(contract)
+	prefix := fmt.Sprintf("%s%s:", transferByNftPrefix, contractLower)
+
+	primaryKey := "tdh:transfer:validEntry"
+
+	// Insert a reference key pointing to the primary record
+	err := db.Update(func(txn *badger.Txn) error {
+		if err := txn.Set([]byte(fmt.Sprintf("%s%s", prefix, "tokenID")), []byte(primaryKey)); err != nil {
+			return err
+		}
+		// Insert an invalid JSON value for the primary record
+		return txn.Set([]byte(primaryKey), []byte("{invalid_json}"))
+	})
+	require.NoError(t, err)
+
+	txn := db.NewTransaction(false)
+	defer txn.Discard()
+
+	transferDB := &TransferDbImpl{}
+	_, err = transferDB.GetTransfersByContract(txn, contract)
+
+	// Expect an error due to JSON unmarshaling failure
+	require.Error(t, err)
+}
+
+func TestGetTransfersByAddress_PrimaryKeyRetrievalError(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	address := "0xABC"
+	addressLower := strings.ToLower(address)
+	prefix := fmt.Sprintf("%s%s:", transferByAddrPrefix, addressLower)
+
+	// Insert a bad value that causes a retrieval failure
+	key := fmt.Sprintf("%s%s", prefix, "invalidEntry")
+
+	err := db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte(key), []byte{})
+	})
+	require.NoError(t, err)
+
+	txn := db.NewTransaction(false)
+	defer txn.Discard()
+
+	transferDB := &TransferDbImpl{}
+	_, err = transferDB.GetTransfersByAddress(txn, address)
+
+	// Expect an error due to invalid primary key retrieval
+	require.Error(t, err)
+}
+
+func TestGetTransfersByAddress_MissingPrimaryRecord(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	address := "0xABC"
+	addressLower := strings.ToLower(address)
+	prefix := fmt.Sprintf("%s%s:", transferByAddrPrefix, addressLower)
+
+	primaryKey := "tdh:transfer:missingEntry"
+
+	// Insert a reference key pointing to a non-existent primary record
+	err := db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte(fmt.Sprintf("%s%s", prefix, "tokenID")), []byte(primaryKey))
+	})
+	require.NoError(t, err)
+
+	txn := db.NewTransaction(false)
+	defer txn.Discard()
+
+	transferDB := &TransferDbImpl{}
+	transfers, err := transferDB.GetTransfersByAddress(txn, address)
+
+	// Expect no error, but transfers should be empty since the primary record was missing
+	require.NoError(t, err)
+	require.Empty(t, transfers)
+}
+
+func TestGetTransfersByAddress_InvalidJSON(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	address := "0xABC"
+	addressLower := strings.ToLower(address)
+	prefix := fmt.Sprintf("%s%s:", transferByAddrPrefix, addressLower)
+
+	primaryKey := "tdh:transfer:validEntry"
+
+	// Insert a reference key and a corrupt JSON value for the primary record
+	err := db.Update(func(txn *badger.Txn) error {
+		if err := txn.Set([]byte(fmt.Sprintf("%s%s", prefix, "tokenID")), []byte(primaryKey)); err != nil {
+			return err
+		}
+		// Insert invalid JSON in the primary record
+		return txn.Set([]byte(primaryKey), []byte("{invalid_json}"))
+	})
+	require.NoError(t, err)
+
+	txn := db.NewTransaction(false)
+	defer txn.Discard()
+
+	transferDB := &TransferDbImpl{}
+	_, err = transferDB.GetTransfersByAddress(txn, address)
+
+	// Expect an error due to JSON unmarshaling failure
+	require.Error(t, err)
 }
