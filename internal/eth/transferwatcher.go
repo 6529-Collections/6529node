@@ -23,8 +23,7 @@ type TokensTransfersWatcher interface {
 	WatchTransfers(
 		contracts []string,
 		startBlock uint64,
-		transfersChan chan<- []tokens.TokenTransfer,
-		latestBlockChan chan<- uint64,
+		transfersChan chan<- tokens.TokenTransferBatch,
 		tipReachedChan chan<- bool,
 	) error
 }
@@ -66,8 +65,7 @@ func NewTokensTransfersWatcher(db *badger.DB, ctx context.Context) (*DefaultToke
 func (w *DefaultTokensTransfersWatcher) WatchTransfers(
 	contracts []string,
 	startBlock uint64,
-	transfersChan chan<- []tokens.TokenTransfer,
-	latestBlockChan chan<- uint64,
+	transfersChan chan<- tokens.TokenTransferBatch,
 	tipReachedChan chan<- bool,
 ) error {
 	defer w.client.Close()
@@ -102,7 +100,6 @@ func (w *DefaultTokensTransfersWatcher) WatchTransfers(
 				endBlock,
 				int(w.maxLogsInBatch),
 				transfersChan,
-				latestBlockChan,
 			)
 			if err != nil {
 				if errors.Is(err, ErrReorgDetected) {
@@ -125,17 +122,16 @@ func (w *DefaultTokensTransfersWatcher) WatchTransfers(
 		sub, err := w.client.SubscribeNewHead(w.ctx, newHeads)
 		if err != nil {
 			zap.L().Warn("Falling back to polling", zap.Error(err))
-			return w.pollForNewBlocks(contractAddrs, &currentBlock, transfersChan, latestBlockChan)
+			return w.pollForNewBlocks(contractAddrs, &currentBlock, transfersChan)
 		}
-		return w.subscribeAndProcessHeads(sub, newHeads, contractAddrs, &currentBlock, transfersChan, latestBlockChan)
+		return w.subscribeAndProcessHeads(sub, newHeads, contractAddrs, &currentBlock, transfersChan)
 	}
 }
 
 func (w *DefaultTokensTransfersWatcher) pollForNewBlocks(
 	contractAddrs []common.Address,
 	currentBlock *uint64,
-	transfersChan chan<- []tokens.TokenTransfer,
-	latestBlockChan chan<- uint64,
+	transfersChan chan<- tokens.TokenTransferBatch,
 ) error {
 	for {
 		if w.ctx.Err() != nil {
@@ -155,7 +151,7 @@ func (w *DefaultTokensTransfersWatcher) pollForNewBlocks(
 			if endBlock > tipBlock {
 				endBlock = tipBlock
 			}
-			err := w.processRangeAdaptive(contractAddrs, *currentBlock, endBlock, int(w.maxLogsInBatch), transfersChan, latestBlockChan)
+			err := w.processRangeAdaptive(contractAddrs, *currentBlock, endBlock, int(w.maxLogsInBatch), transfersChan)
 			if err != nil {
 				if errors.Is(err, ErrReorgDetected) {
 					continue
@@ -185,8 +181,7 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 	newHeads <-chan *types.Header,
 	contractAddrs []common.Address,
 	currentBlock *uint64,
-	transfersChan chan<- []tokens.TokenTransfer,
-	latestBlockChan chan<- uint64,
+	transfersChan chan<- tokens.TokenTransferBatch,
 ) error {
 	defer sub.Unsubscribe()
 
@@ -205,7 +200,7 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 				if endBlock >= blockNum-1 {
 					endBlock = blockNum - 1
 				}
-				err := w.processRangeAdaptive(contractAddrs, *currentBlock, endBlock, int(w.maxLogsInBatch), transfersChan, latestBlockChan)
+				err := w.processRangeAdaptive(contractAddrs, *currentBlock, endBlock, int(w.maxLogsInBatch), transfersChan)
 				if err != nil {
 					if errors.Is(err, ErrReorgDetected) {
 						continue
@@ -217,7 +212,7 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 			}
 
 			if blockNum >= *currentBlock {
-				err := w.processRangeAdaptive(contractAddrs, blockNum, blockNum, int(w.maxLogsInBatch), transfersChan, latestBlockChan)
+				err := w.processRangeAdaptive(contractAddrs, blockNum, blockNum, int(w.maxLogsInBatch), transfersChan)
 				if err != nil {
 					if errors.Is(err, ErrReorgDetected) {
 						continue
@@ -237,8 +232,7 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 	contractAddrs []common.Address,
 	startBlock, endBlock uint64,
 	maxLogsThreshold int,
-	transfersChan chan<- []tokens.TokenTransfer,
-	latestBlockChan chan<- uint64,
+	transfersChan chan<- tokens.TokenTransferBatch,
 ) error {
 	if startBlock > endBlock {
 		return nil
@@ -260,21 +254,31 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 
 	if len(logs) > maxLogsThreshold && endBlock > startBlock {
 		mid := (startBlock + endBlock) / 2
-		err := w.processRangeAdaptive(contractAddrs, startBlock, mid, maxLogsThreshold, transfersChan, latestBlockChan)
+
+		err := w.processRangeAdaptive(
+			contractAddrs, startBlock, mid,
+			maxLogsThreshold,
+			transfersChan,
+		)
 		if err != nil {
 			if errors.Is(err, ErrReorgDetected) {
 				return err
 			}
 			return err
 		}
-		return w.processRangeAdaptive(contractAddrs, mid+1, endBlock, maxLogsThreshold, transfersChan, latestBlockChan)
+
+		return w.processRangeAdaptive(
+			contractAddrs, mid+1, endBlock,
+			maxLogsThreshold,
+			transfersChan,
+		)
 	}
 
 	decodedByBlock := w.decoder.Decode(logs)
 
 	var allTransfers []tokens.TokenTransfer
-	for _, blockTransfers := range decodedByBlock {
-		allTransfers = append(allTransfers, blockTransfers...)
+	for _, perBlockTransfers := range decodedByBlock {
+		allTransfers = append(allTransfers, perBlockTransfers...)
 	}
 
 	txMap := make(map[common.Hash][]*tokens.TokenTransfer)
@@ -294,8 +298,16 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 	}
 
 	blockGroups := groupLogsByBlock(allTransfers)
+
 	if len(blockGroups) == 0 {
-		latestBlockChan <- endBlock
+		select {
+		case transfersChan <- tokens.TokenTransferBatch{
+			Transfers:   nil,
+			BlockNumber: endBlock,
+		}:
+		case <-w.ctx.Done():
+			return w.ctx.Err()
+		}
 		return nil
 	}
 
@@ -305,7 +317,7 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 	}
 	sort.Slice(blocksWithLogs, func(i, j int) bool { return blocksWithLogs[i] < blocksWithLogs[j] })
 
-	var lastLogTime time.Time
+	var finalTransfers []tokens.TokenTransfer
 
 	for _, b := range blocksWithLogs {
 		header, err := w.client.HeaderByNumber(w.ctx, big.NewInt(int64(b)))
@@ -331,27 +343,25 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 			}
 		}
 
-		if time.Since(lastLogTime) >= 10*time.Second {
-			zap.L().Info("TDH Contracts Listener progress", zap.Uint64("currentlyOnBlock", b))
-			lastLogTime = time.Now()
-		}
-
-		logsInBlock := blockGroups[b]
-		sort.Slice(logsInBlock, func(i, j int) bool {
-			if logsInBlock[i].TransactionIndex != logsInBlock[j].TransactionIndex {
-				return logsInBlock[i].TransactionIndex < logsInBlock[j].TransactionIndex
+		blockTransfers := blockGroups[b]
+		sort.Slice(blockTransfers, func(i, j int) bool {
+			if blockTransfers[i].TransactionIndex != blockTransfers[j].TransactionIndex {
+				return blockTransfers[i].TransactionIndex < blockTransfers[j].TransactionIndex
 			}
-			return logsInBlock[i].LogIndex < logsInBlock[j].LogIndex
+			return blockTransfers[i].LogIndex < blockTransfers[j].LogIndex
 		})
 
-		select {
-		case transfersChan <- logsInBlock:
-		case <-w.ctx.Done():
-			return w.ctx.Err()
-		}
+		finalTransfers = append(finalTransfers, blockTransfers...)
 	}
 
-	latestBlockChan <- endBlock
+	select {
+	case transfersChan <- tokens.TokenTransferBatch{
+		Transfers:   finalTransfers,
+		BlockNumber: endBlock,
+	}:
+	case <-w.ctx.Done():
+		return w.ctx.Err()
+	}
 	return nil
 }
 

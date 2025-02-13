@@ -23,7 +23,7 @@ type TdhContractsListener struct {
 }
 
 func (client TdhContractsListener) listen(tipReachedChan chan<- bool) error {
-	nftActionsChan := make(chan []tokens.TokenTransfer)
+	nftActionsChan := make(chan tokens.TokenTransferBatch)
 	go func() {
 		for batch := range nftActionsChan {
 			err := client.transfersReceivedAction.Handle(batch)
@@ -42,15 +42,6 @@ func (client TdhContractsListener) listen(tipReachedChan chan<- bool) error {
 	if startBlock < TDH_CONTRACTS_EPOCH_BLOCK {
 		startBlock = TDH_CONTRACTS_EPOCH_BLOCK
 	}
-	latestBlockChannel := make(chan uint64)
-	go func() {
-		for latestBlock := range latestBlockChannel {
-			err := client.progressTracker.SetProgress(latestBlock)
-			if err != nil {
-				zap.L().Error("Error setting progress", zap.Error(err))
-			}
-		}
-	}()
 	return client.transfersWatcher.WatchTransfers(
 		[]string{
 			MEMES_CONTRACT,
@@ -59,7 +50,6 @@ func (client TdhContractsListener) listen(tipReachedChan chan<- bool) error {
 		},
 		startBlock,
 		nftActionsChan,
-		latestBlockChannel,
 		tipReachedChan,
 	)
 }
@@ -75,10 +65,11 @@ func BlockUntilOnTipAndKeepListeningAsync(badger *badger.DB, ctx context.Context
 	if err != nil {
 		return err
 	}
+	progressTracker := eth.NewTdhIdxTrackerDb(badger)
 	listener := &TdhContractsListener{
 		transfersWatcher:        transfersWatcher,
-		transfersReceivedAction: eth.NewDefaultTdhTransfersReceivedAction(ctx),
-		progressTracker:         eth.NewTdhIdxTrackerDb(badger),
+		transfersReceivedAction: eth.NewDefaultTdhTransfersReceivedAction(ctx, progressTracker),
+		progressTracker:         progressTracker,
 	}
 	tipReachedChan := make(chan bool, 10)
 	go func() {

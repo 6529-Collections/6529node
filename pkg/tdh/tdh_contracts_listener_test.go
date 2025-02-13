@@ -16,7 +16,6 @@ import (
 func TestTdhContractsListener_Listen_ProgressGreaterThanEpochBlock(t *testing.T) {
 	zap.ReplaceGlobals(zap.NewNop())
 
-	// Mocks
 	mIdxTracker := new(mocks.TdhIdxTrackerDb)
 	mTransfersAction := new(mocks.TdhTransfersReceivedAction)
 	mTransfersWatcher := new(transferwatcher.TokensTransfersWatcher)
@@ -32,23 +31,26 @@ func TestTdhContractsListener_Listen_ProgressGreaterThanEpochBlock(t *testing.T)
 			expectedStartBlock,
 			mock.Anything,
 			mock.Anything,
-			mock.Anything,
 		).
 		Return(nil).
 		Run(func(args mock.Arguments) {
-			nftChan := args.Get(2).(chan<- []tokens.TokenTransfer)
-			lbChan := args.Get(3).(chan<- uint64)
-			lbChan <- 13360878
-			nftChan <- []tokens.TokenTransfer{
-				{From: "0x111", To: "0x222"},
+			batchChan := args.Get(2).(chan<- tokens.TokenTransferBatch)
+
+			batchChan <- tokens.TokenTransferBatch{
+				BlockNumber: 13360878,
+				Transfers: []tokens.TokenTransfer{
+					{From: "0x111", To: "0x222"},
+				},
 			}
 
-			close(nftChan)
-			close(lbChan)
+			close(batchChan)
 		})
 
 	mTransfersAction.
-		On("Handle", []tokens.TokenTransfer{{From: "0x111", To: "0x222"}}).
+		On("Handle", tokens.TokenTransferBatch{
+			BlockNumber: 13360878,
+			Transfers:   []tokens.TokenTransfer{{From: "0x111", To: "0x222"}},
+		}).
 		Return(nil).
 		Once()
 
@@ -79,22 +81,15 @@ func TestTdhContractsListener_Listen_ProgressLessThanEpochBlock(t *testing.T) {
 
 	mTransfersWatcher.
 		On("WatchTransfers",
-			[]string{
-				MEMES_CONTRACT,
-				GRADIENTS_CONTRACT,
-				NEXTGEN_CONTRACT,
-			},
+			[]string{MEMES_CONTRACT, GRADIENTS_CONTRACT, NEXTGEN_CONTRACT},
 			TDH_CONTRACTS_EPOCH_BLOCK,
-			mock.Anything,
 			mock.Anything,
 			mock.Anything,
 		).
 		Return(nil).
 		Run(func(args mock.Arguments) {
-			nftChan := args.Get(2).(chan<- []tokens.TokenTransfer)
-			lbChan := args.Get(3).(chan<- uint64)
-			close(nftChan)
-			close(lbChan)
+			batchChan := args.Get(2).(chan<- tokens.TokenTransferBatch)
+			close(batchChan)
 		})
 
 	listener := TdhContractsListener{
@@ -132,8 +127,7 @@ func TestTdhContractsListener_Listen_ErrorOnGetProgress(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get progress")
 
-	mTransfersWatcher.AssertNotCalled(t, "WatchTransfers", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-
+	mTransfersWatcher.AssertNotCalled(t, "WatchTransfers", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mIdxTracker.AssertExpectations(t)
 	mTransfersAction.AssertExpectations(t)
 	mTransfersWatcher.AssertExpectations(t)
@@ -154,10 +148,10 @@ func TestTdhContractsListener_Listen_ErrorOnWatchTransfers(t *testing.T) {
 			uint64(13360860),
 			mock.Anything,
 			mock.Anything,
-			mock.Anything,
 		).
 		Return(errors.New("watch transfers failed")).
 		Once()
+
 	listener := TdhContractsListener{
 		transfersWatcher:        mTransfersWatcher,
 		transfersReceivedAction: mTransfersAction,
@@ -190,25 +184,42 @@ func TestTdhContractsListener_Listen_HandleErrorDoesNotStopLoop(t *testing.T) {
 			uint64(13360860),
 			mock.Anything,
 			mock.Anything,
-			mock.Anything,
 		).
 		Return(nil).
 		Run(func(args mock.Arguments) {
-			nftChan := args.Get(2).(chan<- []tokens.TokenTransfer)
-			lbChan := args.Get(3).(chan<- uint64)
+			batchChan := args.Get(2).(chan<- tokens.TokenTransferBatch)
 
-			nftChan <- []tokens.TokenTransfer{{From: "0xBAD"}}
-			nftChan <- []tokens.TokenTransfer{{From: "0xGOOD"}}
+			batchChan <- tokens.TokenTransferBatch{
+				BlockNumber: 13360860,
+				Transfers: []tokens.TokenTransfer{
+					{From: "0xBAD"},
+				},
+			}
 
-			close(nftChan)
-			close(lbChan)
+			batchChan <- tokens.TokenTransferBatch{
+				BlockNumber: 13360860,
+				Transfers: []tokens.TokenTransfer{
+					{From: "0xGOOD"},
+				},
+			}
+
+			close(batchChan)
 		}).
 		Once()
 
-	mTransfersAction.On("Handle", []tokens.TokenTransfer{{From: "0xBAD"}}).
-		Return(errors.New("some handle error")).Once()
-	mTransfersAction.On("Handle", []tokens.TokenTransfer{{From: "0xGOOD"}}).
-		Return(nil).Once()
+	mTransfersAction.On("Handle", tokens.TokenTransferBatch{
+		BlockNumber: 13360860,
+		Transfers:   []tokens.TokenTransfer{{From: "0xBAD"}},
+	}).
+		Return(errors.New("some handle error")).
+		Once()
+
+	mTransfersAction.On("Handle", tokens.TokenTransferBatch{
+		BlockNumber: 13360860,
+		Transfers:   []tokens.TokenTransfer{{From: "0xGOOD"}},
+	}).
+		Return(nil).
+		Once()
 
 	listener := TdhContractsListener{
 		transfersWatcher:        mTransfersWatcher,
@@ -217,7 +228,7 @@ func TestTdhContractsListener_Listen_HandleErrorDoesNotStopLoop(t *testing.T) {
 	}
 
 	err := listener.listen(make(chan bool))
-	assert.NoError(t, err, "Listen should not immediately fail")
+	assert.NoError(t, err, "Listen should not fail immediately even if one handle call fails")
 
 	time.Sleep(100 * time.Millisecond)
 
