@@ -34,6 +34,14 @@ jobs:
         run: |
           task lint
 
+      - name: Check formatting
+        run: |
+          task format
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "unformatted changes"
+            exit 1
+          fi
+
       - name: Run tests and coverage
         run: |
           task coverage
