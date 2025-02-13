@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/6529-Collections/6529node/pkg/constants"
 	"github.com/dgraph-io/badger/v4"
@@ -49,6 +50,10 @@ func (o *OwnerDbImpl) ResetOwners(db *badger.DB) error {
 }
 
 func (o *OwnerDbImpl) UpdateOwnership(txn *badger.Txn, from, to, contract, tokenID string, amount int64) error {
+	from = strings.ToLower(from)
+	to = strings.ToLower(to)
+	contract = strings.ToLower(contract)
+
 	// Deduct from sender
 	if from != constants.NULL_ADDRESS {
 		fromBalance, err := o.GetBalance(txn, from, contract, tokenID)
@@ -96,6 +101,9 @@ func (o *OwnerDbImpl) UpdateOwnership(txn *badger.Txn, from, to, contract, token
 
 func (o *OwnerDbImpl) GetBalance(txn *badger.Txn, owner, contract, tokenID string) (int64, error) {
 	// Generate key
+	owner = strings.ToLower(owner)
+	contract = strings.ToLower(contract)
+
 	key := fmt.Sprintf("%s%s:%s:%s", ownerPrefix, owner, contract, tokenID)
 
 	// Try retrieving the balance
@@ -119,6 +127,9 @@ func (o *OwnerDbImpl) GetBalance(txn *badger.Txn, owner, contract, tokenID strin
 
 // setBalance updates both the 'owner -> NFT' key and the 'NFT -> owners' key.
 func (o *OwnerDbImpl) setBalance(txn *badger.Txn, owner, contract, tokenID string, amount int64) error {
+	owner = strings.ToLower(owner)
+	contract = strings.ToLower(contract)
+
 	// 1) Owner-based key
 	ownerKey := fmt.Sprintf("%s%s:%s:%s", ownerPrefix, owner, contract, tokenID)
 
@@ -145,6 +156,8 @@ func (o *OwnerDbImpl) setBalance(txn *badger.Txn, owner, contract, tokenID strin
 // GetOwnersByNft scans the 'tdh:nftowners:{contract}:{tokenID}:' prefix
 // to return all owners and their balances.
 func (o *OwnerDbImpl) GetOwnersByNft(txn *badger.Txn, contract, tokenID string) (map[string]int64, error) {
+	contract = strings.ToLower(contract)
+
 	owners := make(map[string]int64)
 
 	prefix := []byte(fmt.Sprintf("%s%s:%s:", nftOwnersPrefix, contract, tokenID))

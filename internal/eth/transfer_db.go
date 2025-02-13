@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
 	"github.com/dgraph-io/badger/v4"
@@ -57,6 +58,8 @@ const (
 
 // StoreTransfer inserts a TokenTransfer into the DB with all relevant indexes.
 func (t *TransferDbImpl) StoreTransfer(txn *badger.Txn, transfer tokens.TokenTransfer) error {
+	tokens.Normalize(&transfer)
+
 	//
 	// 1) Primary Key
 	//
@@ -376,6 +379,7 @@ func (t *TransferDbImpl) GetTransfersByBlockNumber(txn *badger.Txn, blockNumber 
 
 // GetTransfersByTxHash looks up all primary keys under "tdh:txhash:{txHash}" => JSON([]string of primary keys).
 func (t *TransferDbImpl) GetTransfersByTxHash(txn *badger.Txn, txHash string) ([]tokens.TokenTransfer, error) {
+	txHash = strings.ToLower(txHash)
 	txHashKey := fmt.Sprintf("%s%s", txHashPrefix, txHash)
 
 	item, err := txn.Get([]byte(txHashKey))
@@ -418,6 +422,8 @@ func (t *TransferDbImpl) GetTransfersByTxHash(txn *badger.Txn, txHash string) ([
 
 // GetTransfersByNft scans "tdh:transferByNft:{contract}:{tokenID}:" => primaryKey => transfer object
 func (t *TransferDbImpl) GetTransfersByNft(txn *badger.Txn, contract, tokenID string) ([]tokens.TokenTransfer, error) {
+	contract = strings.ToLower(contract)
+
 	var transfers []tokens.TokenTransfer
 
 	prefix := fmt.Sprintf("%s%s:%s:", transferByNftPrefix, contract, tokenID)
@@ -460,6 +466,8 @@ func (t *TransferDbImpl) GetTransfersByNft(txn *badger.Txn, contract, tokenID st
 
 // GetTransfersByAddress scans "tdh:transferByAddress:{address}:" => primaryKey => transfer object
 func (t *TransferDbImpl) GetTransfersByAddress(txn *badger.Txn, address string) ([]tokens.TokenTransfer, error) {
+	address = strings.ToLower(address)
+
 	var transfers []tokens.TokenTransfer
 
 	prefix := fmt.Sprintf("%s%s:", transferByAddrPrefix, address)
@@ -501,6 +509,8 @@ func (t *TransferDbImpl) GetTransfersByAddress(txn *badger.Txn, address string) 
 }
 
 func (t *TransferDbImpl) GetTransfersByContract(txn *badger.Txn, contract string) ([]tokens.TokenTransfer, error) {
+	contract = strings.ToLower(contract)
+
 	var transfers []tokens.TokenTransfer
 
 	// We already have an NFT-based index: "tdh:transferByNft:{contract}:{tokenID}:{blockNumber}:..."

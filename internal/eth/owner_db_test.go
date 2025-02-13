@@ -1,6 +1,7 @@
 package eth
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/6529-Collections/6529node/pkg/constants"
@@ -186,9 +187,11 @@ func TestOwnerDb_GetOwnersByNft(t *testing.T) {
 		owners, err := ownerDb.GetOwnersByNft(txn, "contractX", "tokenFoo")
 		require.NoError(t, err)
 
+		fmt.Println("owners", owners)
+
 		// Should see { "0xAlice" -> 50, "0xBob" -> 100 }
-		assert.Equal(t, int64(50), owners["0xAlice"])
-		assert.Equal(t, int64(100), owners["0xBob"])
+		assert.Equal(t, int64(50), owners["0xalice"])
+		assert.Equal(t, int64(100), owners["0xbob"])
 		return nil
 	})
 	require.NoError(t, err)
@@ -226,9 +229,9 @@ func TestOwnerDb_GetAllOwners(t *testing.T) {
 		//   "0xBob:contractX:tokenFoo"   -> 5
 		//   "0xCarol:contractY:tokenBar" -> 20
 
-		assert.Equal(t, int64(10), all["0xAlice:contractX:tokenFoo"])
-		assert.Equal(t, int64(5), all["0xBob:contractX:tokenFoo"])
-		assert.Equal(t, int64(20), all["0xCarol:contractY:tokenBar"])
+		assert.Equal(t, int64(10), all["0xalice:contractx:tokenFoo"])
+		assert.Equal(t, int64(5), all["0xbob:contractx:tokenFoo"])
+		assert.Equal(t, int64(20), all["0xcarol:contracty:tokenBar"])
 
 		return nil
 	})

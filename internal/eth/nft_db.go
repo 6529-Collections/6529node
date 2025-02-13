@@ -47,6 +47,8 @@ type NFTDbImpl struct{}
 const nftPrefix = "tdh:nft:"
 
 func (n *NFTDbImpl) GetNFT(txn *badger.Txn, contract, tokenID string) (*NFT, error) {
+	contract = strings.ToLower(contract)
+
 	key := nftKey(contract, tokenID)
 
 	item, err := txn.Get([]byte(key))
@@ -76,6 +78,8 @@ func (n *NFTDbImpl) ResetNFTs(db *badger.DB) error {
 
 // UpdateSupply increases the total supply when minting.
 func (n *NFTDbImpl) UpdateSupply(txn *badger.Txn, contract, tokenID string, delta int64) error {
+	contract = strings.ToLower(contract)
+
 	if delta < 0 {
 		return errors.New("delta must be positive")
 	}
@@ -121,6 +125,8 @@ func (n *NFTDbImpl) UpdateSupply(txn *badger.Txn, contract, tokenID string, delt
 
 // UpdateBurntSupply increases the burnt supply when burning tokens.
 func (n *NFTDbImpl) UpdateBurntSupply(txn *badger.Txn, contract, tokenID string, delta int64) error {
+	contract = strings.ToLower(contract)
+
 	if delta <= 0 {
 		return errors.New("delta must be positive")
 	}
@@ -163,6 +169,7 @@ func (n *NFTDbImpl) UpdateBurntSupply(txn *badger.Txn, contract, tokenID string,
 // This scans "tdh:owner:{owner}:" from OwnerDb to get (contract, tokenID) pairs.
 func (n *NFTDbImpl) GetNftsByOwnerAddress(txn *badger.Txn, owner string) ([]NFT, error) {
 	// We'll look for keys of the form: "tdh:owner:{owner}:{contract}:{tokenID}"
+	owner = strings.ToLower(owner)
 	ownerPrefix := fmt.Sprintf("tdh:owner:%s:", owner)
 	opts := badger.DefaultIteratorOptions
 	it := txn.NewIterator(opts)

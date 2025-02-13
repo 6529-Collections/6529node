@@ -1,6 +1,7 @@
 package eth
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/dgraph-io/badger/v4"
@@ -67,7 +68,7 @@ func TestGetNFT(t *testing.T) {
 		nft, err := nftDb.GetNFT(txn, "contractB", "token2")
 		require.NoError(t, err)
 		assert.NotNil(t, nft)
-		assert.Equal(t, "contractB", nft.Contract)
+		assert.True(t, strings.EqualFold("contractb", nft.Contract))
 		assert.Equal(t, "token2", nft.TokenID)
 		assert.Equal(t, int64(5), nft.Supply)
 		assert.Equal(t, int64(0), nft.BurntSupply)
@@ -178,18 +179,18 @@ func TestGetNftsByOwnerAddress(t *testing.T) {
 	// Now store ownership for an address e.g. "0x123"
 	err = db.Update(func(txn *badger.Txn) error {
 		// Owner key for NFT1
-		ownerKey1 := []byte("tdh:owner:0x123:contractX:token100")
+		ownerKey1 := []byte("tdh:owner:0x123:contractx:token100")
 		if err := txn.Set(ownerKey1, []byte("owned")); err != nil {
 			return err
 		}
 		// Owner key for NFT2
-		ownerKey2 := []byte("tdh:owner:0x123:contractY:token200")
+		ownerKey2 := []byte("tdh:owner:0x123:contracty:token200")
 		if err := txn.Set(ownerKey2, []byte("owned")); err != nil {
 			return err
 		}
 		// We'll also add an NFT that the owner does NOT actually own
 		// to verify that it won't appear in the result
-		err := nftDb.UpdateSupply(txn, "contractZ", "token999", 3)
+		err := nftDb.UpdateSupply(txn, "contractz", "token999", 3)
 		if err != nil {
 			return err
 		}
@@ -212,17 +213,17 @@ func TestGetNftsByOwnerAddress(t *testing.T) {
 
 		for _, nft := range nfts {
 			switch {
-			case nft.Contract == "contractX" && nft.TokenID == "token100":
+			case nft.Contract == "contractx" && nft.TokenID == "token100":
 				foundX100 = true
 				assert.Equal(t, int64(10), nft.Supply)
-			case nft.Contract == "contractY" && nft.TokenID == "token200":
+			case nft.Contract == "contracty" && nft.TokenID == "token200":
 				foundY200 = true
 				assert.Equal(t, int64(5), nft.Supply)
 			}
 		}
 
-		assert.True(t, foundX100, "expected contractX/token100 in results")
-		assert.True(t, foundY200, "expected contractY/token200 in results")
+		assert.True(t, foundX100, "expected contractx/token100 in results")
+		assert.True(t, foundY200, "expected contracty/token200 in results")
 
 		return nil
 	})

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/6529-Collections/6529node/pkg/constants"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
@@ -110,11 +109,7 @@ func (a *DefaultTdhTransfersReceivedAction) applyTransfer(
 	storeTransfer bool,
 ) error {
 
-	// Always lowercase addresses to keep consistency
-	transfer.TxHash = strings.ToLower(transfer.TxHash)
-	transfer.Contract = strings.ToLower(transfer.Contract)
-	transfer.From = strings.ToLower(transfer.From)
-	transfer.To = strings.ToLower(transfer.To)
+	tokens.Normalize(&transfer)
 
 	// 1) Possibly store the transfer (usually only in live "Handle")
 	if storeTransfer {

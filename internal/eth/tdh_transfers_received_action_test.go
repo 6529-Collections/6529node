@@ -577,16 +577,24 @@ func TestSingleMint(t *testing.T) {
 }
 
 func TestBurnToDeadAddress(t *testing.T) {
+	// Setup test in-memory database
 	db := setupTestInMemoryDB(t)
 	action := NewTdhTransfersReceivedActionImpl(db, context.Background())
 
-	// Step1: Mint to user
+	// Step 1: Mint to user
 	mint := tokens.TokenTransfer{
-		From: constants.NULL_ADDRESS,
-		To:   "0xUser",
-		// ...
+		From:             constants.NULL_ADDRESS,
+		To:               "0xUser",
+		Contract:         "0xNFT",
+		TokenID:          "999",
+		Amount:           2,
+		TxHash:           "0xMint",
+		BlockNumber:      10,
+		TransactionIndex: 0,
+		LogIndex:         0,
 	}
-	// Step2: user -> DEAD_ADDRESS
+
+	// Step 2: Transfer user -> DEAD_ADDRESS (Burn)
 	burn := tokens.TokenTransfer{
 		From:             "0xUser",
 		To:               constants.DEAD_ADDRESS,
@@ -599,12 +607,24 @@ func TestBurnToDeadAddress(t *testing.T) {
 		TxHash:           "0xDeadBurn",
 	}
 
-	// Execute
+	// Execute minting and burning
 	require.NoError(t, action.Handle([]tokens.TokenTransfer{mint}))
 	require.NoError(t, action.Handle([]tokens.TokenTransfer{burn}))
 
-	// Validate results:
-	// user should have 0, burnt supply should match
+	// Validate: Check that user balance is now 0
+	err := db.View(func(txn *badger.Txn) error {
+		balance, err := action.ownerDb.GetBalance(txn, "0xUser", "0xNFT", "999")
+		require.NoError(t, err)
+		require.Equal(t, int64(0), balance, "User balance should be zero after burning")
+
+		// Validate that burnt supply is correctly updated
+		nft, err := action.nftDb.GetNFT(txn, "0xNFT", "999")
+		require.NoError(t, err)
+		require.Equal(t, int64(2), nft.BurntSupply, "Burnt supply should match the amount burned")
+
+		return nil
+	})
+	require.NoError(t, err)
 }
 
 func TestParseCheckpointValid(t *testing.T) {

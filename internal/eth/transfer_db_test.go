@@ -1,6 +1,8 @@
 package eth
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
@@ -43,11 +45,12 @@ func TestTransferDb_StoreAndGetAllTransfers(t *testing.T) {
 	assert.Len(t, all, 1)
 
 	got := all[0]
-	assert.Equal(t, sample.From, got.From)
-	assert.Equal(t, sample.To, got.To)
-	assert.Equal(t, sample.Contract, got.Contract)
+	assert.True(t, strings.EqualFold(sample.From, got.From))
+	assert.True(t, strings.EqualFold(sample.To, got.To))
+	assert.True(t, strings.EqualFold(sample.Contract, got.Contract))
+	assert.True(t, strings.EqualFold(sample.TxHash, got.TxHash))
+
 	assert.Equal(t, sample.TokenID, got.TokenID)
-	assert.Equal(t, sample.TxHash, got.TxHash)
 	assert.Equal(t, sample.BlockNumber, got.BlockNumber)
 	assert.Equal(t, sample.TransactionIndex, got.TransactionIndex)
 	assert.Equal(t, sample.LogIndex, got.LogIndex)
@@ -342,8 +345,8 @@ func TestTransferDb_ResetToCheckpoint(t *testing.T) {
 
 	// Check they are T1 & T2
 	remainingHashes := []string{remaining[0].TxHash, remaining[1].TxHash}
-	assert.Contains(t, remainingHashes, "0xT1")
-	assert.Contains(t, remainingHashes, "0xT2")
+	assert.Contains(t, remainingHashes, "0xt1")
+	assert.Contains(t, remainingHashes, "0xt2")
 
 	// Double-check via txHash index or address index
 	err = db.View(func(txn *badger.Txn) error {
@@ -415,8 +418,8 @@ func TestTransferDb_GetTransfersByContract(t *testing.T) {
 	require.NoError(t, err)
 	// We expect the first two items
 	assert.Len(t, contractA, 2)
-	assert.Equal(t, "0xContractA", contractA[0].Contract)
-	assert.Equal(t, "0xContractA", contractA[1].Contract)
+	assert.True(t, strings.EqualFold("0xContractA", contractA[0].Contract))
+	assert.True(t, strings.EqualFold("0xContractA", contractA[1].Contract))
 
 	// Query "0xContractB"
 	var contractB []tokens.TokenTransfer
@@ -427,8 +430,8 @@ func TestTransferDb_GetTransfersByContract(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Len(t, contractB, 2)
-	assert.Equal(t, "0xContractB", contractB[0].Contract)
-	assert.Equal(t, "0xContractB", contractB[1].Contract)
+	assert.True(t, strings.EqualFold("0xContractB", contractB[0].Contract))
+	assert.True(t, strings.EqualFold("0xContractB", contractB[1].Contract))
 
 	// Query unknown contract
 	var none []tokens.TokenTransfer
@@ -503,4 +506,171 @@ func TestTransferDb_GetTransfersByBlockMax(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Len(t, upTo20, len(data), "Should get all transfers in the DB")
+}
+
+func TestTransferDb_StoreTransfer_ReadOnlyTxn(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	transferDb := NewTransferDb()
+
+	tr := tokens.TokenTransfer{
+		TxHash:      "0xTest",
+		BlockNumber: 1,
+	}
+
+	// Use db.View instead of db.Update => read-only txn
+	err := db.View(func(txn *badger.Txn) error {
+		// Attempting to store should fail
+		return transferDb.StoreTransfer(txn, tr)
+	})
+
+	require.Error(t, err, "Expected an error since we're in a read-only transaction")
+	t.Logf("Got expected error: %v", err)
+}
+
+func TestTransferDb_StoreTransfer_CorruptedTxHashIndex(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	transferDb := NewTransferDb()
+
+	// We intentionally corrupt the "tdh:txhash:0xCorrupted" key
+	err := db.Update(func(txn *badger.Txn) error {
+		txHashKey := []byte(txHashPrefix + strings.ToLower("0xCorrupted"))
+		// Store something that's invalid JSON
+		return txn.Set(txHashKey, []byte("this-is-not-json"))
+	})
+	require.NoError(t, err)
+
+	// Now try to store a transfer that has TxHash = "0xCorrupted"
+	tr := tokens.TokenTransfer{
+		TxHash:      "0xCorrupted",
+		BlockNumber: 10,
+		From:        "0xFrom",
+		To:          "0xTo",
+		Contract:    "0xContract",
+		TokenID:     "1",
+	}
+	err = db.Update(func(txn *badger.Txn) error {
+		return transferDb.StoreTransfer(txn, tr)
+	})
+	require.Error(t, err, "We expect an unmarshal error when reading existingKeys")
+	assert.Contains(t, err.Error(), "invalid character", "Should fail parsing corrupted JSON")
+}
+
+func TestTransferDb_GetAllTransfers_CorruptedData(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	transferDb := NewTransferDb()
+
+	// Insert a valid transfer
+	err := db.Update(func(txn *badger.Txn) error {
+		return transferDb.StoreTransfer(txn, tokens.TokenTransfer{
+			TxHash:      "0xValid",
+			BlockNumber: 1,
+			From:        "0xA", To: "0xB",
+		})
+	})
+	require.NoError(t, err)
+
+	// Insert a corrupted record directly (bypassing StoreTransfer)
+	err = db.Update(func(txn *badger.Txn) error {
+		corruptedKey := []byte("tdh:transfer:0000000002:00000:00000:0xBad:0xBadContract:123")
+		// Value is not valid JSON
+		return txn.Set(corruptedKey, []byte("not-json"))
+	})
+	require.NoError(t, err)
+
+	// Now try to read all transfers => we expect an error
+	err = db.View(func(txn *badger.Txn) error {
+		_, gerr := transferDb.GetAllTransfers(txn)
+		return gerr
+	})
+	require.Error(t, err, "Should fail on corrupted JSON record")
+	assert.Contains(t, err.Error(), "invalid character", "Unmarshal error expected")
+}
+
+func TestTransferDb_ResetToCheckpoint_CorruptedPrimaryRecord(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	transferDb := NewTransferDb()
+
+	// Insert a valid record at (block=5, tx=0, log=0)
+	err := db.Update(func(txn *badger.Txn) error {
+		return transferDb.StoreTransfer(txn, tokens.TokenTransfer{
+			TxHash:      "0xGood",
+			BlockNumber: 5,
+			LogIndex:    0,
+		})
+	})
+	require.NoError(t, err)
+
+	// Insert a corrupted record in the same or higher block (e.g. block=5)
+	err = db.Update(func(txn *badger.Txn) error {
+		key := []byte("tdh:transfer:0000000005:00000:00001:0xBad:0xContract:1")
+		return txn.Set(key, []byte(`bad-json`))
+	})
+	require.NoError(t, err)
+
+	// Now ResetToCheckpoint at block=5 => tries to prune or read block=5 transfers
+	// => we should hit unmarshal error
+	err = db.Update(func(txn *badger.Txn) error {
+		return transferDb.ResetToCheckpoint(txn, 5, 0, 0)
+	})
+	require.Error(t, err, "Should fail due to corrupted record in the iteration")
+	assert.Contains(t, err.Error(), "failed to unmarshal transfer")
+}
+
+func TestTransferDb_removePrimaryKeyFromList_SingleItem(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+
+	err := db.Update(func(txn *badger.Txn) error {
+		txHashKey := []byte(txHashPrefix + "0xSingle")
+		// It has exactly one primaryKey in its list
+		arr := []string{"tdh:transfer:0000000001:00000:00000:0xSingle:0xC:1"}
+		raw, _ := json.Marshal(arr)
+		if e := txn.Set(txHashKey, raw); e != nil {
+			return e
+		}
+
+		// Now remove that primaryKey
+		return removePrimaryKeyFromList(txn, "tdh:txhash:0xSingle", arr[0])
+	})
+	require.NoError(t, err)
+
+	// Confirm the entire key was deleted
+	err = db.View(func(txn *badger.Txn) error {
+		_, gerr := txn.Get([]byte(txHashPrefix + "0xSingle"))
+		assert.Equal(t, badger.ErrKeyNotFound, gerr)
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func TestTransferDb_GetTransfersByBlockMax_CorruptedBlockNumber(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	transferDb := NewTransferDb()
+
+	// Insert a normal record
+	err := db.Update(func(txn *badger.Txn) error {
+		return transferDb.StoreTransfer(txn, tokens.TokenTransfer{
+			BlockNumber: 5,
+			TxHash:      "0xGood",
+		})
+	})
+	require.NoError(t, err)
+
+	// Insert a bad key
+	err = db.Update(func(txn *badger.Txn) error {
+		key := []byte("tdh:transfer:badblocknum:00000:00000:0xBad:0xContract:1")
+		val := []byte(`{"blockNumber":999}`)
+		return txn.Set(key, val)
+	})
+	require.NoError(t, err)
+
+	// Now call GetTransfersByBlockMax => should fail when it sees the "badblocknum" key
+	var results []tokens.TokenTransfer
+	err = db.View(func(txn *badger.Txn) error {
+		var e error
+		results, e = transferDb.GetTransfersByBlockMax(txn, 10)
+		return e
+	})
+	require.Error(t, err, "Should fail on invalid block substring")
+	assert.Contains(t, err.Error(), "ParseUint")
+	assert.Empty(t, results, "No valid results expected because an error is thrown early")
 }
