@@ -17,8 +17,8 @@ type TdhContractsListener struct {
 }
 
 func (client TdhContractsListener) listen(tipReachedChan chan<- bool) error {
-	nftActionsChan := make(chan []tokens.TokenTransfer)
-	errChan := make(chan error, 1) // Buffered to prevent goroutine leaks
+	nftActionsChan := make(chan tokens.TokenTransferBatch)
+	errChan := make(chan error, 1)
 
 	go func() {
 		for batch := range nftActionsChan {
@@ -62,7 +62,6 @@ func (client TdhContractsListener) listen(tipReachedChan chan<- bool) error {
 			},
 			startBlock,
 			nftActionsChan,
-			latestBlockChannel,
 			tipReachedChan,
 		)
 	}()
@@ -87,10 +86,11 @@ func BlockUntilOnTipAndKeepListeningAsync(badger *badger.DB, ctx context.Context
 	if err != nil {
 		return err
 	}
+	progressTracker := eth.NewTdhIdxTrackerDb(badger)
 	listener := &TdhContractsListener{
 		transfersWatcher:        transfersWatcher,
-		transfersReceivedAction: eth.NewTdhTransfersReceivedActionImpl(badger, ctx),
-		progressTracker:         eth.NewTdhIdxTrackerDb(badger),
+		transfersReceivedAction: eth.NewTdhTransfersReceivedActionImpl(ctx, progressTracker, badger),
+		progressTracker:         progressTracker,
 	}
 	tipReachedChan := make(chan bool, 10)
 	go func() {

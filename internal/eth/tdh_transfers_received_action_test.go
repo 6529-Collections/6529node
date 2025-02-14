@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/6529-Collections/6529node/internal/eth/mocks"
 	"github.com/6529-Collections/6529node/pkg/constants"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
 	"github.com/dgraph-io/badger/v4"
@@ -69,7 +70,8 @@ func TestGetLastSavedCheckpoint(t *testing.T) {
 func TestNewTdhTransfersReceivedActionImpl_EmptyDB(t *testing.T) {
 	db := setupTestInMemoryDB(t)
 	// No data inserted, so transferDb will return empty.
-	action := NewTdhTransfersReceivedActionImpl(db, context.Background())
+	progressTracker := mocks.NewTdhIdxTrackerDb(t)
+	action := NewTdhTransfersReceivedActionImpl(context.Background(), progressTracker, db)
 	require.NotNil(t, action, "Should be able to construct the action even if DB is empty")
 }
 
@@ -107,18 +109,23 @@ func TestNewTdhTransfersReceivedActionImpl_SomeTransfers(t *testing.T) {
 	})
 	require.NoError(t, err, "Failed to insert test transfers")
 
-	action := NewTdhTransfersReceivedActionImpl(db, context.Background())
+	progressTracker := mocks.NewTdhIdxTrackerDb(t)
+	action := NewTdhTransfersReceivedActionImpl(context.Background(), progressTracker, db)
 	require.NotNil(t, action, "Should successfully create the action with data present")
 }
 
 // TestDefaultTdhTransfersReceivedAction_NoTransfers covers the no-op scenario.
 func TestDefaultTdhTransfersReceivedAction_NoTransfers(t *testing.T) {
 	db := setupTestInMemoryDB(t)
-	orchestrator := NewTdhTransfersReceivedActionImpl(db, context.Background())
+	progressTracker := mocks.NewTdhIdxTrackerDb(t)
+	orchestrator := NewTdhTransfersReceivedActionImpl(context.Background(), progressTracker, db)
 	require.NotNil(t, orchestrator)
 
 	// Test calling Handle with no transfers
-	err := orchestrator.Handle([]tokens.TokenTransfer{})
+	err := orchestrator.Handle(tokens.TokenTransferBatch{
+		Transfers:   []tokens.TokenTransfer{},
+		BlockNumber: 0,
+	})
 	require.NoError(t, err)
 
 	// Expect no changes, no errors, just a no-op
@@ -136,7 +143,8 @@ func TestDefaultTdhTransfersReceivedAction_NoTransfers(t *testing.T) {
 // TestDefaultTdhTransfersReceivedAction_BasicFlow covers normal mint and transfers.
 func TestDefaultTdhTransfersReceivedAction_BasicFlow(t *testing.T) {
 	db := setupTestInMemoryDB(t)
-	orchestrator := NewTdhTransfersReceivedActionImpl(db, context.Background())
+	progressTracker := mocks.NewTdhIdxTrackerDb(t)
+	orchestrator := NewTdhTransfersReceivedActionImpl(context.Background(), progressTracker, db)
 	require.NotNil(t, orchestrator)
 
 	// Some sample transfers:
@@ -179,7 +187,13 @@ func TestDefaultTdhTransfersReceivedAction_BasicFlow(t *testing.T) {
 		},
 	}
 
-	err := orchestrator.Handle(transfers)
+	transfersBatch := tokens.TokenTransferBatch{
+		Transfers:   transfers,
+		BlockNumber: 1,
+	}
+
+	progressTracker.On("SetProgress", uint64(1)).Return(nil)
+	err := orchestrator.Handle(transfersBatch)
 	require.NoError(t, err)
 
 	// Check final states (ownerDb, nftDb, checkpoint)
@@ -216,7 +230,8 @@ func TestDefaultTdhTransfersReceivedAction_BasicFlow(t *testing.T) {
 // arrives with a block < lastSavedBlock. This triggers reset and replay logic.
 func TestDefaultTdhTransfersReceivedAction_OutOfOrderReset(t *testing.T) {
 	db := setupTestInMemoryDB(t)
-	orchestrator := NewTdhTransfersReceivedActionImpl(db, context.Background())
+	progressTracker := mocks.NewTdhIdxTrackerDb(t)
+	orchestrator := NewTdhTransfersReceivedActionImpl(context.Background(), progressTracker, db)
 	require.NotNil(t, orchestrator)
 
 	// We'll handle a first batch
@@ -233,8 +248,14 @@ func TestDefaultTdhTransfersReceivedAction_OutOfOrderReset(t *testing.T) {
 			TxHash:           "0xTx1",
 		},
 	}
+
+	transfersBatch := tokens.TokenTransferBatch{
+		Transfers:   batch1,
+		BlockNumber: 10,
+	}
 	// This sets checkpoint to "10:0:0"
-	require.NoError(t, orchestrator.Handle(batch1))
+	progressTracker.On("SetProgress", uint64(10)).Return(nil)
+	require.NoError(t, orchestrator.Handle(transfersBatch))
 
 	// Next we handle a second batch that is "behind" => block=9 => triggers reset
 	batch2 := []tokens.TokenTransfer{
@@ -252,7 +273,12 @@ func TestDefaultTdhTransfersReceivedAction_OutOfOrderReset(t *testing.T) {
 	}
 
 	// Because block=9 is less than the saved checkpoint block=10, we expect a reset
-	err := orchestrator.Handle(batch2)
+	progressTracker.On("SetProgress", uint64(9)).Return(nil)
+	transfersBatch = tokens.TokenTransferBatch{
+		Transfers:   batch2,
+		BlockNumber: 9,
+	}
+	err := orchestrator.Handle(transfersBatch)
 	require.NoError(t, err)
 
 	// After handle completes, let's see what ended up in the DB.
@@ -280,7 +306,8 @@ func TestDefaultTdhTransfersReceivedAction_OutOfOrderReset(t *testing.T) {
 // TestDefaultTdhTransfersReceivedAction_BurnScenario covers a normal burn flow.
 func TestDefaultTdhTransfersReceivedAction_BurnScenario(t *testing.T) {
 	db := setupTestInMemoryDB(t)
-	orchestrator := NewTdhTransfersReceivedActionImpl(db, context.Background())
+	progressTracker := mocks.NewTdhIdxTrackerDb(t)
+	orchestrator := NewTdhTransfersReceivedActionImpl(context.Background(), progressTracker, db)
 	require.NotNil(t, orchestrator)
 
 	// 1) Mint 5 tokens to userC
@@ -322,7 +349,12 @@ func TestDefaultTdhTransfersReceivedAction_BurnScenario(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, orchestrator.Handle(allTransfers))
+	progressTracker.On("SetProgress", uint64(7)).Return(nil)
+	transfersBatch := tokens.TokenTransferBatch{
+		Transfers:   allTransfers,
+		BlockNumber: 7,
+	}
+	require.NoError(t, orchestrator.Handle(transfersBatch))
 
 	// Check final state
 	err := db.View(func(txn *badger.Txn) error {
@@ -357,8 +389,9 @@ func TestDefaultTdhTransfersReceivedAction_BurnScenario(t *testing.T) {
 // cannot afford, expecting an error. This covers the "insufficient balance" branch in applyTransfer.
 func TestDefaultTdhTransfersReceivedAction_InsufficientBalance(t *testing.T) {
 	db := setupTestInMemoryDB(t)
-	action := NewTdhTransfersReceivedActionImpl(db, context.Background())
-	require.NotNil(t, action)
+	progressTracker := mocks.NewTdhIdxTrackerDb(t)
+	orchestrator := NewTdhTransfersReceivedActionImpl(context.Background(), progressTracker, db)
+	require.NotNil(t, orchestrator)
 
 	// 1) Mint 1 token to userX in a separate call so it commits successfully
 	mint := tokens.TokenTransfer{
@@ -374,7 +407,12 @@ func TestDefaultTdhTransfersReceivedAction_InsufficientBalance(t *testing.T) {
 	}
 
 	// First call handles the mint only
-	err := action.Handle([]tokens.TokenTransfer{mint})
+	progressTracker.On("SetProgress", uint64(5)).Return(nil)
+	transfersBatch := tokens.TokenTransferBatch{
+		Transfers:   []tokens.TokenTransfer{mint},
+		BlockNumber: 5,
+	}
+	err := orchestrator.Handle(transfersBatch)
 	require.NoError(t, err, "Mint should succeed")
 
 	// 2) Transfer 2 tokens from userX -> userY, but userX only has 1 => should fail
@@ -390,7 +428,11 @@ func TestDefaultTdhTransfersReceivedAction_InsufficientBalance(t *testing.T) {
 		TxHash:           "0xTxInsufficient",
 	}
 
-	err = action.Handle([]tokens.TokenTransfer{badTransfer})
+	transfersBatch = tokens.TokenTransferBatch{
+		Transfers:   []tokens.TokenTransfer{badTransfer},
+		BlockNumber: 6,
+	}
+	err = orchestrator.Handle(transfersBatch)
 	require.Error(t, err, "Should fail due to insufficient balance")
 
 	// Now verify the mint is still in the DB
@@ -420,8 +462,9 @@ func TestDefaultTdhTransfersReceivedAction_InsufficientBalance(t *testing.T) {
 // in DB is invalid, the parseCheckpoint call inside Handle(...) returns an error.
 func TestDefaultTdhTransfersReceivedAction_InvalidCheckpointData(t *testing.T) {
 	db := setupTestInMemoryDB(t)
-	action := NewTdhTransfersReceivedActionImpl(db, context.Background())
-	require.NotNil(t, action)
+	progressTracker := mocks.NewTdhIdxTrackerDb(t)
+	orchestrator := NewTdhTransfersReceivedActionImpl(context.Background(), progressTracker, db)
+	require.NotNil(t, orchestrator)
 
 	// Manually store invalid checkpoint
 	err := db.Update(func(txn *badger.Txn) error {
@@ -444,7 +487,11 @@ func TestDefaultTdhTransfersReceivedAction_InvalidCheckpointData(t *testing.T) {
 		},
 	}
 
-	err = action.Handle(transfers)
+	transfersBatch := tokens.TokenTransferBatch{
+		Transfers:   transfers,
+		BlockNumber: 10,
+	}
+	err = orchestrator.Handle(transfersBatch)
 	require.Error(t, err, "Should fail because parseCheckpoint can't parse 'some_bad_data'")
 	assert.Contains(t, err.Error(), "invalid checkpoint format")
 }
@@ -452,8 +499,9 @@ func TestDefaultTdhTransfersReceivedAction_InvalidCheckpointData(t *testing.T) {
 // TestDefaultTdhTransfersReceivedAction_MultipleBatches ensures we hit the batch-splitting logic
 func TestDefaultTdhTransfersReceivedAction_MultipleBatches(t *testing.T) {
 	db := setupTestInMemoryDB(t)
-	action := NewTdhTransfersReceivedActionImpl(db, context.Background())
-	require.NotNil(t, action)
+	progressTracker := mocks.NewTdhIdxTrackerDb(t)
+	orchestrator := NewTdhTransfersReceivedActionImpl(context.Background(), progressTracker, db)
+	require.NotNil(t, orchestrator)
 
 	// We'll create more than 100 transfers to force multiple batches
 	var transfers []tokens.TokenTransfer
@@ -473,7 +521,12 @@ func TestDefaultTdhTransfersReceivedAction_MultipleBatches(t *testing.T) {
 	}
 
 	// By default, the code uses batchSize=100. So this will result in 3 batches (100,100,50).
-	err := action.Handle(transfers)
+	progressTracker.On("SetProgress", uint64(1)).Return(nil)
+	transfersBatch := tokens.TokenTransferBatch{
+		Transfers:   transfers,
+		BlockNumber: 1,
+	}
+	err := orchestrator.Handle(transfersBatch)
 	require.NoError(t, err)
 
 	// Check that the final checkpoint = "1:0:249" (the last item)
@@ -489,8 +542,9 @@ func TestDefaultTdhTransfersReceivedAction_MultipleBatches(t *testing.T) {
 
 func TestInvalidCheckpointData(t *testing.T) {
 	db := setupTestInMemoryDB(t)
-	action := NewTdhTransfersReceivedActionImpl(db, context.Background())
-	require.NotNil(t, action)
+	progressTracker := mocks.NewTdhIdxTrackerDb(t)
+	orchestrator := NewTdhTransfersReceivedActionImpl(context.Background(), progressTracker, db)
+	require.NotNil(t, orchestrator)
 
 	// Manually store an invalid checkpoint
 	err := db.Update(func(txn *badger.Txn) error {
@@ -514,7 +568,11 @@ func TestInvalidCheckpointData(t *testing.T) {
 	}
 
 	// This should fail because parseCheckpoint will throw an error for "bad:data:here"
-	err = action.Handle(transfers)
+	transfersBatch := tokens.TokenTransferBatch{
+		Transfers:   transfers,
+		BlockNumber: 10,
+	}
+	err = orchestrator.Handle(transfersBatch)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid checkpoint format")
 }
@@ -534,7 +592,9 @@ func TestNoCheckpointKeyFound(t *testing.T) {
 
 func TestSingleMint(t *testing.T) {
 	db := setupTestInMemoryDB(t)
-	action := NewTdhTransfersReceivedActionImpl(db, context.Background())
+	progressTracker := mocks.NewTdhIdxTrackerDb(t)
+	orchestrator := NewTdhTransfersReceivedActionImpl(context.Background(), progressTracker, db)
+	require.NotNil(t, orchestrator)
 
 	// Just 1 mint => block=10
 	transfer := tokens.TokenTransfer{
@@ -549,7 +609,12 @@ func TestSingleMint(t *testing.T) {
 		TxHash:           "0xMint",
 	}
 
-	err := action.Handle([]tokens.TokenTransfer{transfer})
+	progressTracker.On("SetProgress", uint64(10)).Return(nil)
+	transfersBatch := tokens.TokenTransferBatch{
+		Transfers:   []tokens.TokenTransfer{transfer},
+		BlockNumber: 10,
+	}
+	err := orchestrator.Handle(transfersBatch)
 	require.NoError(t, err)
 
 	// Validate DB
@@ -579,7 +644,9 @@ func TestSingleMint(t *testing.T) {
 
 func TestBurnToDeadAddress(t *testing.T) {
 	db := setupTestInMemoryDB(t)
-	action := NewTdhTransfersReceivedActionImpl(db, context.Background())
+	progressTracker := mocks.NewTdhIdxTrackerDb(t)
+	orchestrator := NewTdhTransfersReceivedActionImpl(context.Background(), progressTracker, db)
+	require.NotNil(t, orchestrator)
 
 	// Step 1: Mint to user
 	mint := tokens.TokenTransfer{
@@ -595,6 +662,7 @@ func TestBurnToDeadAddress(t *testing.T) {
 	}
 
 	// Step 2: Transfer user -> DEAD_ADDRESS (Burn)
+	progressTracker.On("SetProgress", uint64(10)).Return(nil)
 	burn := tokens.TokenTransfer{
 		From:             "0xUser",
 		To:               constants.DEAD_ADDRESS,
@@ -608,17 +676,21 @@ func TestBurnToDeadAddress(t *testing.T) {
 	}
 
 	// Execute minting and burning
-	require.NoError(t, action.Handle([]tokens.TokenTransfer{mint}))
-	require.NoError(t, action.Handle([]tokens.TokenTransfer{burn}))
+	transfersBatch := tokens.TokenTransferBatch{
+		Transfers:   []tokens.TokenTransfer{mint, burn},
+		BlockNumber: 10,
+	}
+	err := orchestrator.Handle(transfersBatch)
+	require.NoError(t, err)
 
 	// Validate: Check that user balance is now 0
-	err := db.View(func(txn *badger.Txn) error {
-		balance, err := action.ownerDb.GetBalance(txn, "0xUser", "0xNFT", "999")
+	err = db.View(func(txn *badger.Txn) error {
+		balance, err := orchestrator.ownerDb.GetBalance(txn, "0xUser", "0xNFT", "999")
 		require.NoError(t, err)
 		require.Equal(t, int64(0), balance, "User balance should be zero after burning")
 
 		// Validate that burnt supply is correctly updated
-		nft, err := action.nftDb.GetNFT(txn, "0xNFT", "999")
+		nft, err := orchestrator.nftDb.GetNFT(txn, "0xNFT", "999")
 		require.NoError(t, err)
 		require.Equal(t, int64(2), nft.BurntSupply, "Burnt supply should match the amount burned")
 

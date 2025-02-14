@@ -13,7 +13,7 @@ import (
 )
 
 type TdhTransfersReceivedAction interface {
-	Handle(transfers []tokens.TokenTransfer) error
+	Handle(transfers tokens.TokenTransferBatch) error
 }
 
 var ErrResetRequired = errors.New("reset required due to out-of-order checkpoint")
@@ -34,14 +34,15 @@ func parseCheckpoint(value string) (uint64, uint64, uint64, error) {
 }
 
 type DefaultTdhTransfersReceivedAction struct {
-	db         *badger.DB
-	transferDb TransferDb
-	ownerDb    OwnerDb
-	nftDb      NFTDb
-	ctx        context.Context
+	ctx             context.Context
+	progressTracker TdhIdxTrackerDb
+	db              *badger.DB
+	transferDb      TransferDb
+	ownerDb         OwnerDb
+	nftDb           NFTDb
 }
 
-func NewTdhTransfersReceivedActionImpl(db *badger.DB, ctx context.Context) *DefaultTdhTransfersReceivedAction {
+func NewTdhTransfersReceivedActionImpl(ctx context.Context, progressTracker TdhIdxTrackerDb, db *badger.DB) *DefaultTdhTransfersReceivedAction {
 
 	transferDb := NewTransferDb()
 	ownerDb := NewOwnerDb()
@@ -95,11 +96,12 @@ func NewTdhTransfersReceivedActionImpl(db *badger.DB, ctx context.Context) *Defa
 	}
 
 	return &DefaultTdhTransfersReceivedAction{
-		db:         db,
-		transferDb: transferDb,
-		ownerDb:    ownerDb,
-		nftDb:      nftDb,
-		ctx:        ctx,
+		ctx:             ctx,
+		progressTracker: progressTracker,
+		db:              db,
+		transferDb:      transferDb,
+		ownerDb:         ownerDb,
+		nftDb:           nftDb,
 	}
 }
 
@@ -268,11 +270,11 @@ func (a *DefaultTdhTransfersReceivedAction) reset(blockNumber uint64, txIndex ui
 	return nil
 }
 
-func (a *DefaultTdhTransfersReceivedAction) Handle(transfers []tokens.TokenTransfer) error {
-	zap.L().Info("Processing transfers received action", zap.Int("transfers", len(transfers)))
+func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch tokens.TokenTransferBatch) error {
+	zap.L().Info("Processing transfers received action", zap.Int("transfers", len(transfersBatch.Transfers)))
 
 	const batchSize = 100
-	numTransfers := len(transfers)
+	numTransfers := len(transfersBatch.Transfers)
 	if numTransfers == 0 {
 		return nil
 	}
@@ -285,7 +287,7 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfers []tokens.TokenTrans
 		if end > numTransfers {
 			end = numTransfers
 		}
-		chunk := transfers[start:end]
+		chunk := transfersBatch.Transfers[start:end]
 
 		firstTransfer := chunk[0]
 		firstTransferValue := checkpointValue(firstTransfer)
@@ -349,7 +351,7 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfers []tokens.TokenTrans
 					zap.L().Error("Failed to reset", zap.Error(err))
 					return err
 				}
-				return a.Handle(transfers) // Restart from scratch
+				return a.Handle(transfersBatch) // Restart from scratch
 			}
 			return err
 		}
@@ -359,6 +361,11 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfers []tokens.TokenTrans
 			zap.Int("batchSize", len(chunk)),
 			zap.String(actionsReceivedCheckpointKey, lastProcessedValue),
 		)
+	}
+
+	err := a.progressTracker.SetProgress(transfersBatch.BlockNumber)
+	if err != nil {
+		return fmt.Errorf("error setting progress: %w", err)
 	}
 
 	return nil

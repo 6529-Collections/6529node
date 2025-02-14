@@ -70,7 +70,10 @@ func main() {
 	// 1) Cancel the context => tell all services to exit
 	cancel()
 
-	// 2) Wait for the listener goroutine to exit
+	// 2) Wait for the context to be done
+	<-ctx.Done()
+
+	// 3) Wait for the listener goroutine to exit
 	<-done
 
 	zap.L().Info("Shutdown complete")

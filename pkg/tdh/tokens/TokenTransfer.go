@@ -30,6 +30,11 @@ type TokenTransfer struct {
 	Type             TransferType
 }
 
+type TokenTransferBatch struct {
+	Transfers   []TokenTransfer
+	BlockNumber uint64
+}
+
 func Normalize(t *TokenTransfer) *TokenTransfer {
 	t.TxHash = strings.ToLower(t.TxHash)
 	t.Contract = strings.ToLower(t.Contract)
