@@ -24,11 +24,16 @@ DB Indexes Created Here:
 */
 
 type NFTDb interface {
-	ResetNFTs(db *badger.DB) error
 	GetNFT(txn *badger.Txn, contract, tokenID string) (*NFT, error)
+	GetNftsByOwnerAddress(txn *badger.Txn, owner string) ([]NFT, error)
+
+	// Updates:
 	UpdateSupply(txn *badger.Txn, contract, tokenID string, delta int64) error
 	UpdateBurntSupply(txn *badger.Txn, contract, tokenID string, delta int64) error
-	GetNftsByOwnerAddress(txn *badger.Txn, owner string) ([]NFT, error)
+
+	// Reverse updates:
+	UpdateSupplyReverse(txn *badger.Txn, contract, tokenID string, delta int64) error
+	UpdateBurntSupplyReverse(txn *badger.Txn, contract, tokenID string, delta int64) error
 }
 
 func NewNFTDb() NFTDb {
@@ -47,8 +52,6 @@ type NFTDbImpl struct{}
 const nftPrefix = "tdh:nft:"
 
 func (n *NFTDbImpl) GetNFT(txn *badger.Txn, contract, tokenID string) (*NFT, error) {
-	contract = strings.ToLower(contract)
-
 	key := nftKey(contract, tokenID)
 
 	item, err := txn.Get([]byte(key))
@@ -69,18 +72,9 @@ func (n *NFTDbImpl) GetNFT(txn *badger.Txn, contract, tokenID string) (*NFT, err
 	return &nft, nil
 }
 
-func (n *NFTDbImpl) ResetNFTs(db *badger.DB) error {
-	if err := db.DropPrefix([]byte(nftPrefix)); err != nil {
-		return fmt.Errorf("failed to drop prefix %s: %w", nftPrefix, err)
-	}
-	return nil
-}
-
 // UpdateSupply increases the total supply when minting.
 func (n *NFTDbImpl) UpdateSupply(txn *badger.Txn, contract, tokenID string, delta int64) error {
-	contract = strings.ToLower(contract)
-
-	if delta < 0 {
+	if delta <= 0 {
 		return errors.New("delta must be positive")
 	}
 
@@ -125,8 +119,6 @@ func (n *NFTDbImpl) UpdateSupply(txn *badger.Txn, contract, tokenID string, delt
 
 // UpdateBurntSupply increases the burnt supply when burning tokens.
 func (n *NFTDbImpl) UpdateBurntSupply(txn *badger.Txn, contract, tokenID string, delta int64) error {
-	contract = strings.ToLower(contract)
-
 	if delta <= 0 {
 		return errors.New("delta must be positive")
 	}
@@ -165,11 +157,79 @@ func (n *NFTDbImpl) UpdateBurntSupply(txn *badger.Txn, contract, tokenID string,
 	return txn.Set([]byte(key), value)
 }
 
+// UpdateSupplyReverse reverts (subtracts) minted supply.
+func (n *NFTDbImpl) UpdateSupplyReverse(txn *badger.Txn, contract, tokenID string, delta int64) error {
+	if delta <= 0 {
+		return errors.New("delta must be positive for reverse supply update")
+	}
+
+	key := nftKey(contract, tokenID)
+	item, err := txn.Get([]byte(key))
+	if err == badger.ErrKeyNotFound {
+		return fmt.Errorf("cannot revert supply on nonexistent NFT contract=%s token=%s", contract, tokenID)
+	} else if err != nil {
+		return err
+	}
+
+	var nft NFT
+	if err := item.Value(func(val []byte) error {
+		return json.Unmarshal(val, &nft)
+	}); err != nil {
+		return err
+	}
+
+	if nft.Supply < delta {
+		return fmt.Errorf("cannot revert %d from supply %d (would go negative)", delta, nft.Supply)
+	}
+
+	nft.Supply -= delta
+
+	// Save updated NFT
+	value, err := json.Marshal(nft)
+	if err != nil {
+		return err
+	}
+	return txn.Set([]byte(key), value)
+}
+
+// UpdateBurntSupplyReverse reverts (subtracts) burnt supply.
+func (n *NFTDbImpl) UpdateBurntSupplyReverse(txn *badger.Txn, contract, tokenID string, delta int64) error {
+	if delta <= 0 {
+		return errors.New("delta must be positive for reverse burnt supply update")
+	}
+
+	key := nftKey(contract, tokenID)
+	item, err := txn.Get([]byte(key))
+	if err == badger.ErrKeyNotFound {
+		return fmt.Errorf("cannot revert burnt supply on nonexistent NFT contract=%s token=%s", contract, tokenID)
+	} else if err != nil {
+		return err
+	}
+
+	var nft NFT
+	if err := item.Value(func(val []byte) error {
+		return json.Unmarshal(val, &nft)
+	}); err != nil {
+		return err
+	}
+
+	if nft.BurntSupply < delta {
+		return fmt.Errorf("cannot revert %d from burnt supply %d (would go negative)", delta, nft.BurntSupply)
+	}
+
+	nft.BurntSupply -= delta
+
+	value, err := json.Marshal(nft)
+	if err != nil {
+		return err
+	}
+	return txn.Set([]byte(key), value)
+}
+
 // NEW: Get all NFTs (metadata) owned by a given address.
 // This scans "tdh:owner:{owner}:" from OwnerDb to get (contract, tokenID) pairs.
 func (n *NFTDbImpl) GetNftsByOwnerAddress(txn *badger.Txn, owner string) ([]NFT, error) {
 	// We'll look for keys of the form: "tdh:owner:{owner}:{contract}:{tokenID}"
-	owner = strings.ToLower(owner)
 	ownerPrefix := fmt.Sprintf("tdh:owner:%s:", owner)
 	opts := badger.DefaultIteratorOptions
 	it := txn.NewIterator(opts)
@@ -184,19 +244,12 @@ func (n *NFTDbImpl) GetNftsByOwnerAddress(txn *badger.Txn, owner string) ([]NFT,
 		// Key format: "tdh:owner:OWNER:CONTRACT:TOKENID"
 		// Let's parse out contract & tokenID from that.
 
-		// Convert key bytes to string
 		fullKey := string(keyBytes)
 		// The portion after "tdh:owner:{owner}:" is "contract:tokenID"
 		suffix := fullKey[len(ownerPrefix):]
 
-		// We'll split on the colon to get contract, tokenID
-		// suffix => "contract:tokenID"
+		// We'll split on the first colon to get contract, tokenID
 		var contract, tokenID string
-		// We can do a simple parse if we expect exactly one colon
-		// but if your contract might contain colons or partial strings, you'd do more robust parsing
-		// For standard usage, let's do:
-		//   "contract:tokenID" => [0]=contract, [1]=tokenID
-		// or handle edge cases gracefully.
 		parts := []rune{}
 		for i, ch := range suffix {
 			if ch == ':' {

@@ -4,11 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
 	"github.com/dgraph-io/badger/v4"
-	"go.uber.org/zap"
 )
 
 /*
@@ -33,7 +31,10 @@ DB Indexes Created Here:
 
 type TransferDb interface {
 	StoreTransfer(txn *badger.Txn, transfer tokens.TokenTransfer) error
-	ResetToCheckpoint(txn *badger.Txn, blockNumber uint64, txIndex uint64, logIndex uint64) error
+
+	GetTransfersAfterCheckpoint(txn *badger.Txn, blockNumber uint64, txIndex uint64, logIndex uint64) ([]tokens.TokenTransfer, error)
+	DeleteTransfersAfterCheckpoint(txn *badger.Txn, blockNumber uint64, txIndex uint64, logIndex uint64) error
+
 	GetAllTransfers(txn *badger.Txn) ([]tokens.TokenTransfer, error)
 	GetTransfersByBlockNumber(txn *badger.Txn, blockNumber uint64) ([]tokens.TokenTransfer, error)
 	GetTransfersByTxHash(txn *badger.Txn, txHash string) ([]tokens.TokenTransfer, error)
@@ -41,6 +42,7 @@ type TransferDb interface {
 	GetTransfersByAddress(txn *badger.Txn, address string) ([]tokens.TokenTransfer, error)
 	GetTransfersByContract(txn *badger.Txn, contract string) ([]tokens.TokenTransfer, error)
 	GetTransfersByBlockMax(txn *badger.Txn, blockNumber uint64) ([]tokens.TokenTransfer, error)
+	GetLatestTransfer(txn *badger.Txn) (*tokens.TokenTransfer, error)
 }
 
 func NewTransferDb() TransferDb {
@@ -58,8 +60,6 @@ const (
 
 // StoreTransfer inserts a TokenTransfer into the DB with all relevant indexes.
 func (t *TransferDbImpl) StoreTransfer(txn *badger.Txn, transfer tokens.TokenTransfer) error {
-	tokens.Normalize(&transfer)
-
 	//
 	// 1) Primary Key
 	//
@@ -166,19 +166,15 @@ func (t *TransferDbImpl) StoreTransfer(txn *badger.Txn, transfer tokens.TokenTra
 	return nil
 }
 
-// ResetToCheckpoint removes all transfers >= the given (blockNumber, txIndex, logIndex)
-// along with their secondary index entries.
-func (t *TransferDbImpl) ResetToCheckpoint(
+func (t *TransferDbImpl) GetTransfersAfterCheckpoint(
 	txn *badger.Txn,
 	blockNumber uint64,
 	txIndex uint64,
 	logIndex uint64,
-) error {
-	// Construct a "start key" that represents the smallest key at or after the checkpoint.
-	// Key format is now: "tdh:transfer:{blockNumber}:{txIndex}:{logIndex}:{txHash}:{contract}:{tokenID}"
-	//
-	// For lexical ordering, we'll zero out the fields after logIndex, leaving an empty suffix.
-	//
+) ([]tokens.TokenTransfer, error) {
+	// We'll create a startKey that includes the zero-padded blockNumber, txIndex, and logIndex,
+	// followed by a colon, so we pick up all keys >= that point.
+	// Key format: "tdh:transfer:0000000000:00000:00000:..."
 	startKey := []byte(fmt.Sprintf("%s%010d:%05d:%05d:",
 		transferPrefix,
 		blockNumber,
@@ -186,43 +182,74 @@ func (t *TransferDbImpl) ResetToCheckpoint(
 		logIndex,
 	))
 
-	zap.L().Info("Resetting to checkpoint",
-		zap.Uint64("blockNumber", blockNumber),
-		zap.Uint64("txIndex", txIndex),
-		zap.Uint64("logIndex", logIndex),
-		zap.String("startKey", string(startKey)),
-	)
+	var results []tokens.TokenTransfer
 
 	it := txn.NewIterator(badger.DefaultIteratorOptions)
 	defer it.Close()
 
-	// Iterate from 'startKey' to the end of the "tdh:transfer:" space.
-	// For each key, parse the transfer, remove it from all indexes, and delete the primary record.
 	for it.Seek(startKey); it.Valid(); it.Next() {
-		item := it.Item()
-		key := item.Key()
+		key := it.Item().Key()
 
-		// If the key no longer starts with "tdh:transfer:", we've gone too far.
+		// Stop if we've moved outside the "tdh:transfer:" space
 		if !hasPrefix(key, []byte(transferPrefix)) {
 			break
 		}
 
-		// We'll parse the stored JSON to get the TokenTransfer fields
 		var tr tokens.TokenTransfer
-		err := item.Value(func(val []byte) error {
+		if err := it.Item().Value(func(val []byte) error {
+			return json.Unmarshal(val, &tr)
+		}); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal transfer: %w", err)
+		}
+
+		// This transfer is at or after the checkpoint in lexical ordering
+		results = append(results, tr)
+	}
+
+	return results, nil
+}
+
+func (t *TransferDbImpl) DeleteTransfersAfterCheckpoint(
+	txn *badger.Txn,
+	blockNumber uint64,
+	txIndex uint64,
+	logIndex uint64,
+) error {
+	// same startKey approach
+	startKey := []byte(fmt.Sprintf("%s%010d:%05d:%05d:",
+		transferPrefix,
+		blockNumber,
+		txIndex,
+		logIndex,
+	))
+
+	it := txn.NewIterator(badger.DefaultIteratorOptions)
+	defer it.Close()
+
+	for it.Seek(startKey); it.Valid(); it.Next() {
+		key := it.Item().Key()
+
+		// If the key no longer starts with "tdh:transfer:", we've gone beyond the range
+		if !hasPrefix(key, []byte(transferPrefix)) {
+			break
+		}
+
+		// Parse the transfer data
+		var tr tokens.TokenTransfer
+		err := it.Item().Value(func(val []byte) error {
 			return json.Unmarshal(val, &tr)
 		})
 		if err != nil {
 			return fmt.Errorf("failed to unmarshal transfer: %w", err)
 		}
 
-		// Remove from txHash index
+		// 1) Remove from txHash -> [primaryKeys] index
 		txHashKey := fmt.Sprintf("%s%s", txHashPrefix, tr.TxHash)
 		if err := removePrimaryKeyFromList(txn, txHashKey, string(key)); err != nil {
 			return fmt.Errorf("failed to remove from txHash index: %w", err)
 		}
 
-		// Remove from NFT index
+		// 2) Remove from the NFT-based index
 		nftIndexKey := fmt.Sprintf("%s%s:%s:%d:%d:%d:%s",
 			transferByNftPrefix,
 			tr.Contract,
@@ -233,10 +260,10 @@ func (t *TransferDbImpl) ResetToCheckpoint(
 			tr.TxHash,
 		)
 		if err := txn.Delete([]byte(nftIndexKey)); err != nil && err != badger.ErrKeyNotFound {
-			return fmt.Errorf("failed to delete NFT index: %w", err)
+			return fmt.Errorf("failed to delete NFT index key: %w", err)
 		}
 
-		// Remove from address-based index (from)
+		// 3) Remove from address-based index (from)
 		fromKey := fmt.Sprintf("%s%s:%d:%d:%d:%s",
 			transferByAddrPrefix,
 			tr.From,
@@ -246,10 +273,9 @@ func (t *TransferDbImpl) ResetToCheckpoint(
 			tr.TxHash,
 		)
 		if err := txn.Delete([]byte(fromKey)); err != nil && err != badger.ErrKeyNotFound {
-			return fmt.Errorf("failed to delete from address index: %w", err)
+			return fmt.Errorf("failed to delete 'from' address index: %w", err)
 		}
-
-		// Remove from address-based index (to) if different
+		// If from != to, remove the 'to' entry as well
 		if tr.From != tr.To {
 			toKey := fmt.Sprintf("%s%s:%d:%d:%d:%s",
 				transferByAddrPrefix,
@@ -260,18 +286,21 @@ func (t *TransferDbImpl) ResetToCheckpoint(
 				tr.TxHash,
 			)
 			if err := txn.Delete([]byte(toKey)); err != nil && err != badger.ErrKeyNotFound {
-				return fmt.Errorf("failed to delete to address index: %w", err)
+				return fmt.Errorf("failed to delete 'to' address index: %w", err)
 			}
 		}
 
-		// Delete the primary record
+		// 4) Finally remove the primary record
 		if err := txn.Delete(key); err != nil && err != badger.ErrKeyNotFound {
-			return fmt.Errorf("failed to delete primary transfer record: %w", err)
+			return fmt.Errorf("failed to delete primary record: %w", err)
 		}
 
+		// Because we've just deleted the current item, we must reposition iteration to its next key:
+		//   it.Seek(key)
+		// This ensures the iterator won't skip anything. Alternatively, we could store `it.Item().KeyCopy()`
+		// before deleting, but this approach is simpler if the data set isn't huge.
 		it.Seek(key)
 	}
-
 	return nil
 }
 
@@ -379,7 +408,6 @@ func (t *TransferDbImpl) GetTransfersByBlockNumber(txn *badger.Txn, blockNumber 
 
 // GetTransfersByTxHash looks up all primary keys under "tdh:txhash:{txHash}" => JSON([]string of primary keys).
 func (t *TransferDbImpl) GetTransfersByTxHash(txn *badger.Txn, txHash string) ([]tokens.TokenTransfer, error) {
-	txHash = strings.ToLower(txHash)
 	txHashKey := fmt.Sprintf("%s%s", txHashPrefix, txHash)
 
 	item, err := txn.Get([]byte(txHashKey))
@@ -422,8 +450,6 @@ func (t *TransferDbImpl) GetTransfersByTxHash(txn *badger.Txn, txHash string) ([
 
 // GetTransfersByNft scans "tdh:transferByNft:{contract}:{tokenID}:" => primaryKey => transfer object
 func (t *TransferDbImpl) GetTransfersByNft(txn *badger.Txn, contract, tokenID string) ([]tokens.TokenTransfer, error) {
-	contract = strings.ToLower(contract)
-
 	var transfers []tokens.TokenTransfer
 
 	prefix := fmt.Sprintf("%s%s:%s:", transferByNftPrefix, contract, tokenID)
@@ -466,8 +492,6 @@ func (t *TransferDbImpl) GetTransfersByNft(txn *badger.Txn, contract, tokenID st
 
 // GetTransfersByAddress scans "tdh:transferByAddress:{address}:" => primaryKey => transfer object
 func (t *TransferDbImpl) GetTransfersByAddress(txn *badger.Txn, address string) ([]tokens.TokenTransfer, error) {
-	address = strings.ToLower(address)
-
 	var transfers []tokens.TokenTransfer
 
 	prefix := fmt.Sprintf("%s%s:", transferByAddrPrefix, address)
@@ -509,8 +533,6 @@ func (t *TransferDbImpl) GetTransfersByAddress(txn *badger.Txn, address string) 
 }
 
 func (t *TransferDbImpl) GetTransfersByContract(txn *badger.Txn, contract string) ([]tokens.TokenTransfer, error) {
-	contract = strings.ToLower(contract)
-
 	var transfers []tokens.TokenTransfer
 
 	// We already have an NFT-based index: "tdh:transferByNft:{contract}:{tokenID}:{blockNumber}:..."
@@ -597,4 +619,30 @@ func (t *TransferDbImpl) GetTransfersByBlockMax(txn *badger.Txn, blockNumber uin
 	}
 
 	return transfers, nil
+}
+
+func (t *TransferDbImpl) GetLatestTransfer(txn *badger.Txn) (*tokens.TokenTransfer, error) {
+	var transfer tokens.TokenTransfer
+	prefix := []byte(transferPrefix)
+
+	opts := badger.DefaultIteratorOptions
+	opts.Prefix = prefix
+	opts.Reverse = true
+	itr := txn.NewIterator(opts)
+	defer itr.Close()
+
+	itr.Rewind()
+	if !itr.Valid() {
+		return nil, nil
+	}
+
+	item := itr.Item()
+	err := item.Value(func(val []byte) error {
+		return json.Unmarshal(val, &transfer)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &transfer, nil
 }

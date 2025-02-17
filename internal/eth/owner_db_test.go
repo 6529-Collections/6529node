@@ -10,46 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Reuse the same helper as in nft_db_test.go
-// If your test files are in the same package, you can just call setupTestInMemoryDB(t).
-// If they are in a different package, you can either make it public or duplicate it here.
-
-func TestOwnerDb_ResetOwners(t *testing.T) {
-	db := setupTestInMemoryDB(t)
-	defer db.Close()
-
-	ownerDb := NewOwnerDb()
-
-	// Insert some ownership data
-	err := db.Update(func(txn *badger.Txn) error {
-		// We can directly call setBalance to create a record
-		return ownerDb.(*OwnerDbImpl).setBalance(txn, "0xOwner1", "contractA", "token1", 50)
-	})
-	require.NoError(t, err)
-
-	// Confirm it's in the DB
-	err = db.View(func(txn *badger.Txn) error {
-		balance, err := ownerDb.GetBalance(txn, "0xOwner1", "contractA", "token1")
-		require.NoError(t, err)
-		assert.Equal(t, int64(50), balance)
-		return nil
-	})
-	require.NoError(t, err)
-
-	// Reset
-	err = ownerDb.ResetOwners(db)
-	require.NoError(t, err)
-
-	// Confirm ownership data is gone
-	err = db.View(func(txn *badger.Txn) error {
-		balance, err := ownerDb.GetBalance(txn, "0xOwner1", "contractA", "token1")
-		require.NoError(t, err)
-		assert.Equal(t, int64(0), balance)
-		return nil
-	})
-	require.NoError(t, err)
-}
-
 func TestOwnerDb_UpdateOwnership(t *testing.T) {
 	db := setupTestInMemoryDB(t)
 	defer db.Close()
@@ -58,8 +18,7 @@ func TestOwnerDb_UpdateOwnership(t *testing.T) {
 
 	// Let's create an initial balance for "0xAlice"
 	err := db.Update(func(txn *badger.Txn) error {
-		// 0xAlice mints or is assigned 100 units
-		// from = NULL_ADDRESS => this might be a "mint" scenario in your logic
+		// 0xAlice mints 100 units (from null => alice)
 		return ownerDb.UpdateOwnership(txn, constants.NULL_ADDRESS, "0xAlice", "contractX", "token123", 100)
 	})
 	require.NoError(t, err)
@@ -132,6 +91,68 @@ func TestOwnerDb_UpdateOwnership(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// NEW test: reversing a previous transfer from->to.
+func TestOwnerDb_UpdateOwnershipReverse(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	defer db.Close()
+	ownerDb := NewOwnerDb()
+
+	// 1) Mint 100 to Alice (null->alice)
+	err := db.Update(func(txn *badger.Txn) error {
+		return ownerDb.UpdateOwnership(txn, constants.NULL_ADDRESS, "0xAlice", "contractX", "token123", 100)
+	})
+	require.NoError(t, err)
+
+	// 2) Forward transfer 40 from Alice->Bob
+	err = db.Update(func(txn *badger.Txn) error {
+		return ownerDb.UpdateOwnership(txn, "0xAlice", "0xBob", "contractX", "token123", 40)
+	})
+	require.NoError(t, err)
+
+	// Check balances: Alice=60, Bob=40
+	err = db.View(func(txn *badger.Txn) error {
+		aliceBal, _ := ownerDb.GetBalance(txn, "0xAlice", "contractX", "token123")
+		bobBal, _ := ownerDb.GetBalance(txn, "0xBob", "contractX", "token123")
+		assert.Equal(t, int64(60), aliceBal)
+		assert.Equal(t, int64(40), bobBal)
+		return nil
+	})
+	require.NoError(t, err)
+
+	// 3) Reverse that same transfer (Alice->Bob, 40).  Means Bob->Alice, 40
+	err = db.Update(func(txn *badger.Txn) error {
+		return ownerDb.UpdateOwnershipReverse(txn, "0xAlice", "0xBob", "contractX", "token123", 40)
+	})
+	require.NoError(t, err)
+
+	// Now balances should be: Alice=100, Bob=0
+	err = db.View(func(txn *badger.Txn) error {
+		aliceBal, _ := ownerDb.GetBalance(txn, "0xAlice", "contractX", "token123")
+		bobBal, _ := ownerDb.GetBalance(txn, "0xBob", "contractX", "token123")
+		assert.Equal(t, int64(100), aliceBal)
+		assert.Equal(t, int64(0), bobBal)
+		return nil
+	})
+	require.NoError(t, err)
+
+	// 4) Try reversing a transfer that is "bigger" than Bob's actual balance
+	//    i.e. reverse from->to= (Alice->Bob, 99) but Bob doesn't have 99 now
+	err = db.Update(func(txn *badger.Txn) error {
+		return ownerDb.UpdateOwnershipReverse(txn, "0xAlice", "0xBob", "contractX", "token123", 99)
+	})
+	assert.Error(t, err, "reverse transfer error: insufficient balance at 'to' address")
+
+	// Balances remain unchanged
+	err = db.View(func(txn *badger.Txn) error {
+		aliceBal, _ := ownerDb.GetBalance(txn, "0xAlice", "contractX", "token123")
+		bobBal, _ := ownerDb.GetBalance(txn, "0xBob", "contractX", "token123")
+		assert.Equal(t, int64(100), aliceBal)
+		assert.Equal(t, int64(0), bobBal)
+		return nil
+	})
+	require.NoError(t, err)
+}
+
 func TestOwnerDb_GetBalance(t *testing.T) {
 	db := setupTestInMemoryDB(t)
 	defer db.Close()
@@ -189,9 +210,9 @@ func TestOwnerDb_GetOwnersByNft(t *testing.T) {
 
 		fmt.Println("owners", owners)
 
-		// Should see { "0xAlice" -> 50, "0xBob" -> 100 }
-		assert.Equal(t, int64(50), owners["0xalice"])
-		assert.Equal(t, int64(100), owners["0xbob"])
+		// Should see { "0xalice" -> 50, "0xbob" -> 100 }
+		assert.Equal(t, int64(50), owners["0xAlice"])
+		assert.Equal(t, int64(100), owners["0xBob"])
 		return nil
 	})
 	require.NoError(t, err)
@@ -206,13 +227,14 @@ func TestOwnerDb_GetAllOwners(t *testing.T) {
 	// Insert some ownership
 	err := db.Update(func(txn *badger.Txn) error {
 		// Just do direct setBalance for variety
-		if err := ownerDb.(*OwnerDbImpl).setBalance(txn, "0xAlice", "contractX", "tokenFoo", 10); err != nil {
+		impl := ownerDb.(*OwnerDbImpl)
+		if err := impl.setBalance(txn, "0xAlice", "contractX", "tokenFoo", 10); err != nil {
 			return err
 		}
-		if err := ownerDb.(*OwnerDbImpl).setBalance(txn, "0xBob", "contractX", "tokenFoo", 5); err != nil {
+		if err := impl.setBalance(txn, "0xBob", "contractX", "tokenFoo", 5); err != nil {
 			return err
 		}
-		if err := ownerDb.(*OwnerDbImpl).setBalance(txn, "0xCarol", "contractY", "tokenBar", 20); err != nil {
+		if err := impl.setBalance(txn, "0xCarol", "contractY", "tokenBar", 20); err != nil {
 			return err
 		}
 		return nil
@@ -229,24 +251,13 @@ func TestOwnerDb_GetAllOwners(t *testing.T) {
 		//   "0xBob:contractX:tokenFoo"   -> 5
 		//   "0xCarol:contractY:tokenBar" -> 20
 
-		assert.Equal(t, int64(10), all["0xalice:contractx:tokenFoo"])
-		assert.Equal(t, int64(5), all["0xbob:contractx:tokenFoo"])
-		assert.Equal(t, int64(20), all["0xcarol:contracty:tokenBar"])
+		assert.Equal(t, int64(10), all["0xAlice:contractX:tokenFoo"])
+		assert.Equal(t, int64(5), all["0xBob:contractX:tokenFoo"])
+		assert.Equal(t, int64(20), all["0xCarol:contractY:tokenBar"])
 
 		return nil
 	})
 	require.NoError(t, err)
-}
-
-func TestResetOwners_Error(t *testing.T) {
-	db := setupTestInMemoryDB(t)
-	db.Close() // Force an error
-
-	ownerDb := &OwnerDbImpl{}
-	err := ownerDb.ResetOwners(db)
-
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to drop prefix")
 }
 
 func TestUpdateOwnership_GetBalanceError(t *testing.T) {
@@ -307,7 +318,7 @@ func TestGetBalance_UnmarshalError(t *testing.T) {
 	db := setupTestInMemoryDB(t)
 
 	err := db.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte("tdh:owner:0xowner:0xcontract:1"), []byte("invalid_json"))
+		return txn.Set([]byte("tdh:owner:0xOwner:0xContract:1"), []byte("invalid_json"))
 	})
 	require.NoError(t, err)
 
@@ -324,7 +335,7 @@ func TestGetOwnersByNft_UnmarshalError(t *testing.T) {
 	db := setupTestInMemoryDB(t)
 
 	err := db.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte("tdh:nftowners:0xcontract:1:0xowner"), []byte("invalid_json"))
+		return txn.Set([]byte("tdh:nftowners:0xContract:1:0xOwner"), []byte("invalid_json"))
 	})
 	require.NoError(t, err)
 

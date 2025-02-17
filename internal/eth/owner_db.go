@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/6529-Collections/6529node/pkg/constants"
 	"github.com/dgraph-io/badger/v4"
@@ -21,8 +20,12 @@ DB Indexes Created Here:
 */
 
 type OwnerDb interface {
-	ResetOwners(db *badger.DB) error
+	// Forward direction: from -> to
 	UpdateOwnership(txn *badger.Txn, from, to, contract, tokenID string, amount int64) error
+
+	// Reverse direction: undo a previous from->to by doing to->from
+	UpdateOwnershipReverse(txn *badger.Txn, from, to, contract, tokenID string, amount int64) error
+
 	GetBalance(txn *badger.Txn, owner, contract, tokenID string) (int64, error)
 	GetOwnersByNft(txn *badger.Txn, contract, tokenID string) (map[string]int64, error)
 	GetAllOwners(txn *badger.Txn) (map[string]int64, error)
@@ -37,27 +40,19 @@ type OwnerDbImpl struct{}
 const ownerPrefix = "tdh:owner:"
 const nftOwnersPrefix = "tdh:nftowners:"
 
-func (o *OwnerDbImpl) ResetOwners(db *badger.DB) error {
-	prefixes := [][]byte{[]byte(ownerPrefix), []byte(nftOwnersPrefix)}
-
-	for _, prefix := range prefixes {
-		if err := db.DropPrefix(prefix); err != nil {
-			return fmt.Errorf("failed to drop prefix %s: %w", prefix, err)
-		}
-	}
-
-	return nil
-}
-
+// UpdateOwnership handles the normal forward transfer: from -> to.
 func (o *OwnerDbImpl) UpdateOwnership(txn *badger.Txn, from, to, contract, tokenID string, amount int64) error {
-	from = strings.ToLower(from)
-	to = strings.ToLower(to)
-	contract = strings.ToLower(contract)
+	if amount <= 0 {
+		return errors.New("transfer error: amount must be positive")
+	}
 
 	// Deduct from sender
 	if from != constants.NULL_ADDRESS {
 		fromBalance, err := o.GetBalance(txn, from, contract, tokenID)
-		if err != nil || fromBalance < amount {
+		if err != nil {
+			return err
+		}
+		if fromBalance < amount {
 			return errors.New("transfer error: insufficient balance")
 		}
 
@@ -83,33 +78,80 @@ func (o *OwnerDbImpl) UpdateOwnership(txn *badger.Txn, from, to, contract, token
 	}
 
 	// Add to receiver
-	toBalance, err := o.GetBalance(txn, to, contract, tokenID)
-	if err == badger.ErrKeyNotFound {
-		toBalance = 0 // Default to 0 if not found
-	} else if err != nil {
-		return err
+	if to != constants.NULL_ADDRESS {
+		toBalance, err := o.GetBalance(txn, to, contract, tokenID)
+		if err != nil {
+			return err
+		}
+		newToBalance := toBalance + amount
+		return o.setBalance(txn, to, contract, tokenID, newToBalance)
 	}
 
-	newToBalance := toBalance + amount
-	err = o.setBalance(txn, to, contract, tokenID, newToBalance)
-	if err != nil {
-		return err
-	}
-
+	// If `to` is the null address, we effectively "burn" them (no balance to maintain).
 	return nil
 }
 
+// UpdateOwnershipReverse undoes a previous transfer from->to by doing to->from.
+func (o *OwnerDbImpl) UpdateOwnershipReverse(txn *badger.Txn, from, to, contract, tokenID string, amount int64) error {
+	if amount <= 0 {
+		return errors.New("reverse transfer error: amount must be positive")
+	}
+
+	// In a forward scenario, 'from->to' was done.
+	// So reversing means we do 'to->from' by removing tokens from 'to' and adding to 'from'.
+
+	// Deduct from 'to'
+	if to != constants.NULL_ADDRESS {
+		toBalance, err := o.GetBalance(txn, to, contract, tokenID)
+		if err != nil {
+			return err
+		}
+		if toBalance < amount {
+			return errors.New("reverse transfer error: insufficient balance at 'to' address")
+		}
+
+		newToBalance := toBalance - amount
+		if newToBalance == 0 {
+			// Remove the key if balance is zero
+			err = txn.Delete([]byte(fmt.Sprintf("%s%s:%s:%s", ownerPrefix, to, contract, tokenID)))
+			if err != nil {
+				return err
+			}
+			// Also remove from NFT->owners index
+			err = txn.Delete([]byte(fmt.Sprintf("%s%s:%s:%s", nftOwnersPrefix, contract, tokenID, to)))
+			if err != nil {
+				return err
+			}
+		} else {
+			// Update the balance
+			if err := o.setBalance(txn, to, contract, tokenID, newToBalance); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Give back to 'from'
+	if from != constants.NULL_ADDRESS {
+		fromBalance, err := o.GetBalance(txn, from, contract, tokenID)
+		if err != nil {
+			return err
+		}
+		newFromBalance := fromBalance + amount
+		if err := o.setBalance(txn, from, contract, tokenID, newFromBalance); err != nil {
+			return err
+		}
+	}
+
+	// If 'from' is null, it effectively "un-mints" them (burn).
+	return nil
+}
+
+// GetBalance returns the balance for owner->(contract,tokenID).
 func (o *OwnerDbImpl) GetBalance(txn *badger.Txn, owner, contract, tokenID string) (int64, error) {
-	// Generate key
-	owner = strings.ToLower(owner)
-	contract = strings.ToLower(contract)
-
 	key := fmt.Sprintf("%s%s:%s:%s", ownerPrefix, owner, contract, tokenID)
-
-	// Try retrieving the balance
 	item, err := txn.Get([]byte(key))
 	if err == badger.ErrKeyNotFound {
-		return 0, nil // Default to 0 if key is not found
+		return 0, nil
 	} else if err != nil {
 		return 0, err
 	}
@@ -125,14 +167,10 @@ func (o *OwnerDbImpl) GetBalance(txn *badger.Txn, owner, contract, tokenID strin
 	return balance, nil
 }
 
-// setBalance updates both the 'owner -> NFT' key and the 'NFT -> owners' key.
+// setBalance updates both the 'owner->NFT' key and the 'NFT->owners' key.
 func (o *OwnerDbImpl) setBalance(txn *badger.Txn, owner, contract, tokenID string, amount int64) error {
-	owner = strings.ToLower(owner)
-	contract = strings.ToLower(contract)
-
 	// 1) Owner-based key
 	ownerKey := fmt.Sprintf("%s%s:%s:%s", ownerPrefix, owner, contract, tokenID)
-
 	// 2) NFT-based key
 	nftOwnerKey := fmt.Sprintf("%s%s:%s:%s", nftOwnersPrefix, contract, tokenID, owner)
 
@@ -141,11 +179,9 @@ func (o *OwnerDbImpl) setBalance(txn *badger.Txn, owner, contract, tokenID strin
 		return err
 	}
 
-	// Update "owner -> NFT" index
 	if err := txn.Set([]byte(ownerKey), value); err != nil {
 		return err
 	}
-	// Update "NFT -> owners" index
 	if err := txn.Set([]byte(nftOwnerKey), value); err != nil {
 		return err
 	}
@@ -154,23 +190,17 @@ func (o *OwnerDbImpl) setBalance(txn *badger.Txn, owner, contract, tokenID strin
 }
 
 // GetOwnersByNft scans the 'tdh:nftowners:{contract}:{tokenID}:' prefix
-// to return all owners and their balances.
+// to find all owners of a given NFT.
 func (o *OwnerDbImpl) GetOwnersByNft(txn *badger.Txn, contract, tokenID string) (map[string]int64, error) {
-	contract = strings.ToLower(contract)
-
-	owners := make(map[string]int64)
-
 	prefix := []byte(fmt.Sprintf("%s%s:%s:", nftOwnersPrefix, contract, tokenID))
 
-	opts := badger.DefaultIteratorOptions
-	it := txn.NewIterator(opts)
+	owners := make(map[string]int64)
+	it := txn.NewIterator(badger.DefaultIteratorOptions)
 	defer it.Close()
 
 	for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
 		item := it.Item()
 		keyBytes := item.Key()
-		// key format: "tdh:nftowners:{contract}:{tokenID}:{owner}"
-
 		var balance int64
 		err := item.Value(func(val []byte) error {
 			return json.Unmarshal(val, &balance)
@@ -187,13 +217,12 @@ func (o *OwnerDbImpl) GetOwnersByNft(txn *badger.Txn, contract, tokenID string) 
 	return owners, nil
 }
 
+// GetAllOwners enumerates all "tdh:owner:" records, returning a map of "owner:contract:tokenID" => balance
 func (o *OwnerDbImpl) GetAllOwners(txn *badger.Txn) (map[string]int64, error) {
 	owners := make(map[string]int64)
-
 	prefix := []byte(ownerPrefix)
 
-	opts := badger.DefaultIteratorOptions
-	it := txn.NewIterator(opts)
+	it := txn.NewIterator(badger.DefaultIteratorOptions)
 	defer it.Close()
 
 	for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
@@ -208,8 +237,9 @@ func (o *OwnerDbImpl) GetAllOwners(txn *badger.Txn) (map[string]int64, error) {
 			return nil, err
 		}
 
-		owner := string(keyBytes[len(prefix):])
-		owners[owner] = balance
+		// Key portion after "tdh:owner:"
+		suffix := string(keyBytes[len(prefix):]) // e.g. "0xAlice:contractX:tokenFoo"
+		owners[suffix] = balance
 	}
 
 	return owners, nil

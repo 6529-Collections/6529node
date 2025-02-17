@@ -298,66 +298,6 @@ func TestTransferDb_GetTransfersByAddress(t *testing.T) {
 	assert.Len(t, bob, 3)
 }
 
-func TestTransferDb_ResetToCheckpoint(t *testing.T) {
-	db := setupTestInMemoryDB(t)
-	transferDb := NewTransferDb()
-
-	// We'll store multiple transfers across different (blockNumber, txIndex, logIndex).
-	data := []tokens.TokenTransfer{
-		{BlockNumber: 1, TransactionIndex: 0, LogIndex: 0, TxHash: "0xT1", From: "0xA", To: "0xB"},
-		{BlockNumber: 1, TransactionIndex: 0, LogIndex: 1, TxHash: "0xT2", From: "0xC", To: "0xD"},
-		{BlockNumber: 1, TransactionIndex: 1, LogIndex: 0, TxHash: "0xT3", From: "0xE", To: "0xF"},
-		{BlockNumber: 2, TransactionIndex: 0, LogIndex: 0, TxHash: "0xT4", From: "0xG", To: "0xH"},
-		{BlockNumber: 2, TransactionIndex: 1, LogIndex: 5, TxHash: "0xT5", From: "0xI", To: "0xJ"},
-	}
-
-	err := db.Update(func(txn *badger.Txn) error {
-		for _, tr := range data {
-			if e := transferDb.StoreTransfer(txn, tr); e != nil {
-				return e
-			}
-		}
-		return nil
-	})
-	require.NoError(t, err)
-
-	// Now let's pick a checkpoint => blockNumber=1, txIndex=1, logIndex=0
-	// Everything at or beyond that is pruned.
-	err = db.Update(func(txn *badger.Txn) error {
-		return transferDb.ResetToCheckpoint(txn, 1, 1, 0)
-	})
-	require.NoError(t, err)
-
-	// We expect only the first two transfers to remain:
-	//   (1,0,0) => T1
-	//   (1,0,1) => T2
-	//
-	// The ones at (1,1,0) and block=2 are pruned.
-
-	// Check all transfers left
-	var remaining []tokens.TokenTransfer
-	err = db.View(func(txn *badger.Txn) error {
-		var e error
-		remaining, e = transferDb.GetAllTransfers(txn)
-		return e
-	})
-	require.NoError(t, err)
-	assert.Len(t, remaining, 2)
-
-	// Check they are T1 & T2
-	remainingHashes := []string{remaining[0].TxHash, remaining[1].TxHash}
-	assert.Contains(t, remainingHashes, "0xt1")
-	assert.Contains(t, remainingHashes, "0xt2")
-
-	// Double-check via txHash index or address index
-	err = db.View(func(txn *badger.Txn) error {
-		t3Res, _ := transferDb.GetTransfersByTxHash(txn, "0xT3")
-		assert.Empty(t, t3Res, "Expected T3 to be pruned")
-		return nil
-	})
-	require.NoError(t, err)
-}
-
 func TestTransferDb_GetTransfersByContract(t *testing.T) {
 	db := setupTestInMemoryDB(t)
 	transferDb := NewTransferDb()
@@ -534,7 +474,7 @@ func TestTransferDb_StoreTransfer_CorruptedTxHashIndex(t *testing.T) {
 
 	// We intentionally corrupt the "tdh:txhash:0xCorrupted" key
 	err := db.Update(func(txn *badger.Txn) error {
-		txHashKey := []byte(txHashPrefix + strings.ToLower("0xCorrupted"))
+		txHashKey := []byte(txHashPrefix + "0xCorrupted")
 		// Store something that's invalid JSON
 		return txn.Set(txHashKey, []byte("this-is-not-json"))
 	})
@@ -585,36 +525,6 @@ func TestTransferDb_GetAllTransfers_CorruptedData(t *testing.T) {
 	})
 	require.Error(t, err, "Should fail on corrupted JSON record")
 	assert.Contains(t, err.Error(), "invalid character", "Unmarshal error expected")
-}
-
-func TestTransferDb_ResetToCheckpoint_CorruptedPrimaryRecord(t *testing.T) {
-	db := setupTestInMemoryDB(t)
-	transferDb := NewTransferDb()
-
-	// Insert a valid record at (block=5, tx=0, log=0)
-	err := db.Update(func(txn *badger.Txn) error {
-		return transferDb.StoreTransfer(txn, tokens.TokenTransfer{
-			TxHash:      "0xGood",
-			BlockNumber: 5,
-			LogIndex:    0,
-		})
-	})
-	require.NoError(t, err)
-
-	// Insert a corrupted record in the same or higher block (e.g. block=5)
-	err = db.Update(func(txn *badger.Txn) error {
-		key := []byte("tdh:transfer:0000000005:00000:00001:0xBad:0xContract:1")
-		return txn.Set(key, []byte(`bad-json`))
-	})
-	require.NoError(t, err)
-
-	// Now ResetToCheckpoint at block=5 => tries to prune or read block=5 transfers
-	// => we should hit unmarshal error
-	err = db.Update(func(txn *badger.Txn) error {
-		return transferDb.ResetToCheckpoint(txn, 5, 0, 0)
-	})
-	require.Error(t, err, "Should fail due to corrupted record in the iteration")
-	assert.Contains(t, err.Error(), "failed to unmarshal transfer")
 }
 
 func TestTransferDb_removePrimaryKeyFromList_SingleItem(t *testing.T) {
@@ -707,8 +617,7 @@ func TestGetTransfersByContract_PrimaryKeyRetrievalError(t *testing.T) {
 	db := setupTestInMemoryDB(t)
 
 	contract := "0xABC"
-	contractLower := strings.ToLower(contract)
-	prefix := fmt.Sprintf("%s%s:", transferByNftPrefix, contractLower)
+	prefix := fmt.Sprintf("%s%s:", transferByNftPrefix, contract)
 
 	// Simulate error by inserting an invalid value (force a failure in item.Value)
 	key := fmt.Sprintf("%s%s", prefix, "invalidEntry")
@@ -733,8 +642,7 @@ func TestGetTransfersByContract_MissingPrimaryRecord(t *testing.T) {
 	db := setupTestInMemoryDB(t)
 
 	contract := "0xABC"
-	contractLower := strings.ToLower(contract)
-	prefix := fmt.Sprintf("%s%s:", transferByNftPrefix, contractLower)
+	prefix := fmt.Sprintf("%s%s:", transferByNftPrefix, contract)
 
 	// Insert a reference key, but do NOT insert the primary record
 	primaryKey := "tdh:transfer:missingEntry"
@@ -760,8 +668,7 @@ func TestGetTransfersByContract_InvalidJSON(t *testing.T) {
 	db := setupTestInMemoryDB(t)
 
 	contract := "0xABC"
-	contractLower := strings.ToLower(contract)
-	prefix := fmt.Sprintf("%s%s:", transferByNftPrefix, contractLower)
+	prefix := fmt.Sprintf("%s%s:", transferByNftPrefix, contract)
 
 	primaryKey := "tdh:transfer:validEntry"
 
@@ -789,8 +696,7 @@ func TestGetTransfersByAddress_PrimaryKeyRetrievalError(t *testing.T) {
 	db := setupTestInMemoryDB(t)
 
 	address := "0xABC"
-	addressLower := strings.ToLower(address)
-	prefix := fmt.Sprintf("%s%s:", transferByAddrPrefix, addressLower)
+	prefix := fmt.Sprintf("%s%s:", transferByAddrPrefix, address)
 
 	// Insert a bad value that causes a retrieval failure
 	key := fmt.Sprintf("%s%s", prefix, "invalidEntry")
@@ -814,8 +720,7 @@ func TestGetTransfersByAddress_MissingPrimaryRecord(t *testing.T) {
 	db := setupTestInMemoryDB(t)
 
 	address := "0xABC"
-	addressLower := strings.ToLower(address)
-	prefix := fmt.Sprintf("%s%s:", transferByAddrPrefix, addressLower)
+	prefix := fmt.Sprintf("%s%s:", transferByAddrPrefix, address)
 
 	primaryKey := "tdh:transfer:missingEntry"
 
@@ -840,8 +745,7 @@ func TestGetTransfersByAddress_InvalidJSON(t *testing.T) {
 	db := setupTestInMemoryDB(t)
 
 	address := "0xABC"
-	addressLower := strings.ToLower(address)
-	prefix := fmt.Sprintf("%s%s:", transferByAddrPrefix, addressLower)
+	prefix := fmt.Sprintf("%s%s:", transferByAddrPrefix, address)
 
 	primaryKey := "tdh:transfer:validEntry"
 
@@ -863,4 +767,102 @@ func TestGetTransfersByAddress_InvalidJSON(t *testing.T) {
 
 	// Expect an error due to JSON unmarshaling failure
 	require.Error(t, err)
+}
+
+func TestTransferDb_DeleteTransfersAfterCheckpoint(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	transferDb := NewTransferDb()
+
+	// We'll store multiple transfers across different block/tx/log combos.
+	data := []tokens.TokenTransfer{
+		{BlockNumber: 1, TransactionIndex: 0, LogIndex: 0, TxHash: "0xT1", From: "0xA", To: "0xB"},
+		{BlockNumber: 1, TransactionIndex: 0, LogIndex: 1, TxHash: "0xT2", From: "0xC", To: "0xD"},
+		{BlockNumber: 1, TransactionIndex: 1, LogIndex: 0, TxHash: "0xT3", From: "0xE", To: "0xF"},
+		{BlockNumber: 2, TransactionIndex: 0, LogIndex: 0, TxHash: "0xT4", From: "0xG", To: "0xH"},
+		{BlockNumber: 2, TransactionIndex: 1, LogIndex: 5, TxHash: "0xT5", From: "0xI", To: "0xJ"},
+	}
+
+	// Insert them
+	err := db.Update(func(txn *badger.Txn) error {
+		for _, tr := range data {
+			if e := transferDb.StoreTransfer(txn, tr); e != nil {
+				return e
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+
+	// Now let's pick a checkpoint => block=1, tx=1, log=0
+	// We'll remove everything >= (1,1,0)
+	err = db.Update(func(txn *badger.Txn) error {
+		return transferDb.DeleteTransfersAfterCheckpoint(txn, 1, 1, 0)
+	})
+	require.NoError(t, err)
+
+	// After that, we expect only the first two transfers to remain:
+	//   (1,0,0) => T1
+	//   (1,0,1) => T2
+	// The ones at (1,1,0) and block=2 are pruned.
+
+	var remaining []tokens.TokenTransfer
+	err = db.View(func(txn *badger.Txn) error {
+		var e error
+		remaining, e = transferDb.GetAllTransfers(txn)
+		return e
+	})
+	require.NoError(t, err)
+	require.Len(t, remaining, 2)
+
+	// Check they are T1 & T2
+	hashes := []string{remaining[0].TxHash, remaining[1].TxHash}
+	assert.Contains(t, hashes, "0xT1")
+	assert.Contains(t, hashes, "0xT2")
+
+	// Make sure T3, T4, T5 are gone
+	err = db.View(func(txn *badger.Txn) error {
+		t3Res, _ := transferDb.GetTransfersByTxHash(txn, "0xT3")
+		assert.Empty(t, t3Res)
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func TestTransferDb_GetTransfersAfterCheckpoint(t *testing.T) {
+	db := setupTestInMemoryDB(t)
+	transferDb := NewTransferDb()
+
+	data := []tokens.TokenTransfer{
+		{BlockNumber: 1, TransactionIndex: 0, LogIndex: 0, TxHash: "0xA"},
+		{BlockNumber: 1, TransactionIndex: 0, LogIndex: 1, TxHash: "0xB"},
+		{BlockNumber: 1, TransactionIndex: 1, LogIndex: 0, TxHash: "0xC"},
+		{BlockNumber: 2, TransactionIndex: 0, LogIndex: 0, TxHash: "0xD"},
+	}
+
+	err := db.Update(func(txn *badger.Txn) error {
+		for _, tr := range data {
+			if e := transferDb.StoreTransfer(txn, tr); e != nil {
+				return e
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+
+	// We'll get everything >= (1,0,1).
+	// That should yield: (1,0,1)=B, (1,1,0)=C, (2,0,0)=D.
+	var got []tokens.TokenTransfer
+	err = db.View(func(txn *badger.Txn) error {
+		var e error
+		got, e = transferDb.GetTransfersAfterCheckpoint(txn, 1, 0, 1)
+		return e
+	})
+	require.NoError(t, err)
+
+	// Expect 3 results: B, C, D
+	require.Len(t, got, 3)
+	txHashes := []string{got[0].TxHash, got[1].TxHash, got[2].TxHash}
+	assert.Contains(t, txHashes, "0xB")
+	assert.Contains(t, txHashes, "0xC")
+	assert.Contains(t, txHashes, "0xD")
 }
