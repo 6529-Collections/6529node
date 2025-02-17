@@ -1,9 +1,7 @@
 ignore:
   - "cmd/node/main.go"
-  - "cmd/tdh_calculation/main.go"
   - "internal/eth/mocks"
   - "internal/network/mocks"
-  - "pkg/tdh_calculation"
   - "scripts/db_local_compare"
   - "scripts/dump"
 coverage:
