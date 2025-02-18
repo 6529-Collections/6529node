@@ -358,7 +358,7 @@ func hasPrefix(s, prefix []byte) bool {
 func (t *TransferDbImpl) GetAllTransfers(txn *badger.Txn) ([]tokens.TokenTransfer, error) {
 	var transfers []tokens.TokenTransfer
 
-	prefix := []byte(transferPrefix) // "tdh:transfer:"
+	prefix := []byte(transferPrefix)
 	it := txn.NewIterator(badger.DefaultIteratorOptions)
 	defer it.Close()
 
@@ -626,15 +626,22 @@ func (t *TransferDbImpl) GetLatestTransfer(txn *badger.Txn) (*tokens.TokenTransf
 	prefix := []byte(transferPrefix)
 
 	opts := badger.DefaultIteratorOptions
-	opts.Prefix = prefix
 	opts.Reverse = true
+	opts.Prefix = prefix
 	itr := txn.NewIterator(opts)
 	defer itr.Close()
 
-	itr.Rewind()
-	if !itr.Valid() {
+	fmt.Println("Debug: Checking latest key")
+
+	// Seek to the highest key under this prefix
+	itr.Seek(append(prefix, 0xFF)) // Move to the highest lexicographic key
+	if !itr.ValidForPrefix(prefix) {
+		fmt.Println("No valid keys found with this prefix.")
 		return nil, nil
 	}
+
+	// Print the found key
+	fmt.Printf("Found latest key: %s\n", string(itr.Item().Key()))
 
 	item := itr.Item()
 	err := item.Value(func(val []byte) error {

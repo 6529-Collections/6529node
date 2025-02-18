@@ -243,6 +243,7 @@ func (a *DefaultTdhTransfersReceivedAction) reset(
 			if deleteErr != nil {
 				return fmt.Errorf("failed to delete checkpoint: %w", deleteErr)
 			}
+			zap.L().Info("Checkpoint deleted")
 		} else {
 			lastCheckpointValue := checkpointValue(*latestTransfer)
 
