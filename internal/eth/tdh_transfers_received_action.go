@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/6529-Collections/6529node/pkg/constants"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
 	"github.com/dgraph-io/badger/v4"
 	"go.uber.org/zap"
@@ -49,53 +48,11 @@ func NewTdhTransfersReceivedActionImpl(ctx context.Context, progressTracker TdhI
 	nftDb := NewNFTDb()
 
 	err := db.View(func(txn *badger.Txn) error {
-		allTransfers, err := transferDb.GetAllTransfers(txn)
-		if err != nil {
-			return fmt.Errorf("failed to get all transfers: %w", err)
-		}
-
-		gradientTransfers, err := transferDb.GetTransfersByContract(txn, constants.GRADIENTS_CONTRACT)
-		if err != nil {
-			return fmt.Errorf("failed to get gradient transfers: %w", err)
-		}
-
-		memesTransfers, err := transferDb.GetTransfersByContract(txn, constants.MEMES_CONTRACT)
-		if err != nil {
-			return fmt.Errorf("failed to get memes transfers: %w", err)
-		}
-
-		nextgenTransfers, err := transferDb.GetTransfersByContract(txn, constants.NEXTGEN_CONTRACT)
-		if err != nil {
-			return fmt.Errorf("failed to get nextgen transfers: %w", err)
-		}
-
-		zap.L().Info("Transfers",
-			zap.Int("total", len(allTransfers)),
-			zap.Int("gradient", len(gradientTransfers)),
-			zap.Int("memes", len(memesTransfers)),
-			zap.Int("nextgen", len(nextgenTransfers)),
-		)
-
-		sort.Slice(allTransfers, func(i, j int) bool {
-			return allTransfers[i].BlockNumber < allTransfers[j].BlockNumber
-		})
-		if len(allTransfers) == 0 {
-			zap.L().Debug("No transfers found")
-			return nil
-		}
-		latestTransfer := allTransfers[len(allTransfers)-1]
-		zap.L().Debug("Latest block",
-			zap.Uint64("block", latestTransfer.BlockNumber),
-			zap.Uint64("txIndex", latestTransfer.TransactionIndex),
-			zap.Uint64("logIndex", latestTransfer.LogIndex),
-		)
-
 		lastSavedCheckpointValue, err := getLastSavedCheckpoint(txn)
 		if err != nil {
 			return fmt.Errorf("failed to get last saved checkpoint: %w", err)
 		}
 		zap.L().Debug("Last saved checkpoint", zap.String("checkpoint", string(lastSavedCheckpointValue)))
-
 		return nil
 	})
 
@@ -200,69 +157,73 @@ func (a *DefaultTdhTransfersReceivedAction) reset(
 		zap.Uint64("logIndex", logIndex),
 	)
 
-	err := a.db.Update(func(txn *badger.Txn) error {
-		// 1) Get all transfers at or after checkpoint
-		transfers, err := a.transferDb.GetTransfersAfterCheckpoint(txn, blockNumber, txIndex, logIndex)
-		if err != nil {
-			return fmt.Errorf("failed to get transfers: %w", err)
+	// 1) Gather all transfers at or after checkpoint in a *read* transaction.
+	var transfers []tokens.TokenTransfer
+	err := a.db.View(func(txn *badger.Txn) error {
+		found, e := a.transferDb.GetTransfersAfterCheckpoint(txn, blockNumber, txIndex, logIndex)
+		if e != nil {
+			return e
 		}
+		transfers = found
+		return nil
+	})
+	if err != nil {
+		zap.L().Error("Error gathering transfers", zap.Error(err))
+		return fmt.Errorf("failed to get transfers: %w", err)
+	}
 
-		// 2) Sort descending
-		sort.Slice(transfers, func(i, j int) bool {
-			if transfers[i].BlockNumber != transfers[j].BlockNumber {
-				return transfers[i].BlockNumber > transfers[j].BlockNumber
-			}
-			if transfers[i].TransactionIndex != transfers[j].TransactionIndex {
-				return transfers[i].TransactionIndex > transfers[j].TransactionIndex
-			}
-			return transfers[i].LogIndex > transfers[j].LogIndex
-		})
+	// 2) Sort descending
+	sort.Slice(transfers, func(i, j int) bool {
+		if transfers[i].BlockNumber != transfers[j].BlockNumber {
+			return transfers[i].BlockNumber > transfers[j].BlockNumber
+		}
+		if transfers[i].TransactionIndex != transfers[j].TransactionIndex {
+			return transfers[i].TransactionIndex > transfers[j].TransactionIndex
+		}
+		return transfers[i].LogIndex > transfers[j].LogIndex
+	})
 
-		// 3) Reverse each transfer
+	// 3) Reverse each transfer in a single small transaction,
+	//    or you could even do this in memory if no DB writes are needed,
+	//    but usually reversing means writing back to DB, so let's do:
+	err = a.db.Update(func(txn *badger.Txn) error {
 		for _, tr := range transfers {
 			if e := a.applyTransferReverse(txn, tr); e != nil {
 				return e
 			}
 		}
-
-		// 4) Delete them from TransferDb
-		if err := a.transferDb.DeleteTransfersAfterCheckpoint(txn, blockNumber, txIndex, logIndex); err != nil {
-			return fmt.Errorf("failed to delete transfers after checkpoint: %w", err)
-		}
-
-		// 5) Update the checkpoint
-		latestTransfer, err := a.transferDb.GetLatestTransfer(txn)
-		if err != nil {
-			return fmt.Errorf("failed to get latest transfer: %w", err)
-		}
-
-		if latestTransfer == nil {
-			deleteErr := a.db.Update(func(txn *badger.Txn) error {
-				return txn.Delete([]byte(actionsReceivedCheckpointKey))
-			})
-			if deleteErr != nil {
-				return fmt.Errorf("failed to delete checkpoint: %w", deleteErr)
-			}
-			zap.L().Info("Checkpoint deleted")
-		} else {
-			lastCheckpointValue := checkpointValue(*latestTransfer)
-
-			saveErr := a.db.Update(func(txn *badger.Txn) error {
-				return txn.Set([]byte(actionsReceivedCheckpointKey), []byte(lastCheckpointValue))
-			})
-			if saveErr != nil {
-				return fmt.Errorf("failed to save checkpoint: %w", saveErr)
-			}
-
-			zap.L().Info("Checkpoint saved", zap.String(actionsReceivedCheckpointKey, lastCheckpointValue))
-		}
-
 		return nil
 	})
 	if err != nil {
-		zap.L().Error("Reset error", zap.Error(err))
+		return fmt.Errorf("failed to reverse transfers: %w", err)
 	}
-	return err
+
+	// 4) Chunk-delete them from TransferDb in *separate transactions*
+	//    so we don’t exceed Badger’s max txn size.
+	err = a.transferDb.DeleteTransfersAfterCheckpoint(a.db, blockNumber, txIndex, logIndex)
+	if err != nil {
+		return fmt.Errorf("failed to delete transfers after checkpoint: %w", err)
+	}
+
+	// 5) Finally update the checkpoint in another small transaction
+	err = a.db.Update(func(txn *badger.Txn) error {
+		latestTransfer, e := a.transferDb.GetLatestTransfer(txn)
+		if e != nil {
+			return fmt.Errorf("failed to get latest transfer: %w", e)
+		}
+		if latestTransfer == nil {
+			return txn.Delete([]byte(actionsReceivedCheckpointKey))
+		} else {
+			lastCheckpointValue := checkpointValue(*latestTransfer)
+			return txn.Set([]byte(actionsReceivedCheckpointKey), []byte(lastCheckpointValue))
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update checkpoint: %w", err)
+	}
+
+	zap.L().Info("Reset complete")
+	return nil
 }
 
 func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch tokens.TokenTransferBatch) error {

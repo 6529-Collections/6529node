@@ -795,9 +795,7 @@ func TestTransferDb_DeleteTransfersAfterCheckpoint(t *testing.T) {
 
 	// Now let's pick a checkpoint => block=1, tx=1, log=0
 	// We'll remove everything >= (1,1,0)
-	err = db.Update(func(txn *badger.Txn) error {
-		return transferDb.DeleteTransfersAfterCheckpoint(txn, 1, 1, 0)
-	})
+	err = transferDb.DeleteTransfersAfterCheckpoint(db, 1, 1, 0)
 	require.NoError(t, err)
 
 	// After that, we expect only the first two transfers to remain:

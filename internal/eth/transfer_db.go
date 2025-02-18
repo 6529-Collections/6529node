@@ -33,7 +33,7 @@ type TransferDb interface {
 	StoreTransfer(txn *badger.Txn, transfer tokens.TokenTransfer) error
 
 	GetTransfersAfterCheckpoint(txn *badger.Txn, blockNumber uint64, txIndex uint64, logIndex uint64) ([]tokens.TokenTransfer, error)
-	DeleteTransfersAfterCheckpoint(txn *badger.Txn, blockNumber uint64, txIndex uint64, logIndex uint64) error
+	DeleteTransfersAfterCheckpoint(db *badger.DB, blockNumber uint64, txIndex uint64, logIndex uint64) error
 
 	GetAllTransfers(txn *badger.Txn) ([]tokens.TokenTransfer, error)
 	GetTransfersByBlockNumber(txn *badger.Txn, blockNumber uint64) ([]tokens.TokenTransfer, error)
@@ -210,12 +210,14 @@ func (t *TransferDbImpl) GetTransfersAfterCheckpoint(
 }
 
 func (t *TransferDbImpl) DeleteTransfersAfterCheckpoint(
-	txn *badger.Txn,
+	db *badger.DB,
 	blockNumber uint64,
 	txIndex uint64,
 	logIndex uint64,
 ) error {
-	// same startKey approach
+	const chunkSize = 1_000
+
+	// Prepare the initial start key
 	startKey := []byte(fmt.Sprintf("%s%010d:%05d:%05d:",
 		transferPrefix,
 		blockNumber,
@@ -223,84 +225,112 @@ func (t *TransferDbImpl) DeleteTransfersAfterCheckpoint(
 		logIndex,
 	))
 
-	it := txn.NewIterator(badger.DefaultIteratorOptions)
-	defer it.Close()
+	var currentKey []byte // Will track where we left off between chunks
+	copyStartKey := make([]byte, len(startKey))
+	copy(copyStartKey, startKey)
+	currentKey = copyStartKey
 
-	for it.Seek(startKey); it.Valid(); it.Next() {
-		key := it.Item().Key()
+	for {
+		var nextKey []byte     // If we still have more after chunk
+		var itemsProcessed int // Count how many we delete in this chunk
 
-		// If the key no longer starts with "tdh:transfer:", we've gone beyond the range
-		if !hasPrefix(key, []byte(transferPrefix)) {
+		err := db.Update(func(txn *badger.Txn) error {
+			it := txn.NewIterator(badger.DefaultIteratorOptions)
+			defer it.Close()
+
+			// Move iterator to the currentKey
+			it.Seek(currentKey)
+
+			for ; it.Valid(); it.Next() {
+				key := it.Item().Key()
+				// If the key no longer starts with our prefix, we are done
+				if !hasPrefix(key, []byte(transferPrefix)) {
+					break
+				}
+
+				// Parse the transfer so we can remove indexes properly
+				var tr tokens.TokenTransfer
+				err := it.Item().Value(func(val []byte) error {
+					return json.Unmarshal(val, &tr)
+				})
+				if err != nil {
+					return fmt.Errorf("failed to unmarshal transfer: %w", err)
+				}
+
+				// 1) Remove from txHash -> [primaryKeys] index
+				txHashKey := fmt.Sprintf("%s%s", txHashPrefix, tr.TxHash)
+				if err := removePrimaryKeyFromList(txn, txHashKey, string(key)); err != nil {
+					return fmt.Errorf("failed to remove from txHash index: %w", err)
+				}
+
+				// 2) Remove from the NFT-based index
+				nftIndexKey := fmt.Sprintf("%s%s:%s:%d:%d:%d:%s",
+					transferByNftPrefix,
+					tr.Contract,
+					tr.TokenID,
+					tr.BlockNumber,
+					tr.TransactionIndex,
+					tr.LogIndex,
+					tr.TxHash,
+				)
+				if err := txn.Delete([]byte(nftIndexKey)); err != nil && err != badger.ErrKeyNotFound {
+					return fmt.Errorf("failed to delete NFT index key: %w", err)
+				}
+
+				// 3) Remove from address-based index (from)
+				fromKey := fmt.Sprintf("%s%s:%d:%d:%d:%s",
+					transferByAddrPrefix,
+					tr.From,
+					tr.BlockNumber,
+					tr.TransactionIndex,
+					tr.LogIndex,
+					tr.TxHash,
+				)
+				if err := txn.Delete([]byte(fromKey)); err != nil && err != badger.ErrKeyNotFound {
+					return fmt.Errorf("failed to delete 'from' address index: %w", err)
+				}
+				if tr.From != tr.To {
+					toKey := fmt.Sprintf("%s%s:%d:%d:%d:%s",
+						transferByAddrPrefix,
+						tr.To,
+						tr.BlockNumber,
+						tr.TransactionIndex,
+						tr.LogIndex,
+						tr.TxHash,
+					)
+					if err := txn.Delete([]byte(toKey)); err != nil && err != badger.ErrKeyNotFound {
+						return fmt.Errorf("failed to delete 'to' address index: %w", err)
+					}
+				}
+
+				// 4) Remove the primary record
+				if err := txn.Delete(key); err != nil && err != badger.ErrKeyNotFound {
+					return fmt.Errorf("failed to delete primary record: %w", err)
+				}
+
+				itemsProcessed++
+				if itemsProcessed >= chunkSize {
+					// We hit our chunk limit. We'll resume from this key.
+					nextKey = it.Item().KeyCopy(nil)
+					break
+				}
+			}
+
+			return nil
+		}) // end Update
+		if err != nil {
+			return err
+		}
+
+		// If we processed fewer than chunkSize items, we're done.
+		if itemsProcessed < chunkSize {
 			break
 		}
 
-		// Parse the transfer data
-		var tr tokens.TokenTransfer
-		err := it.Item().Value(func(val []byte) error {
-			return json.Unmarshal(val, &tr)
-		})
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal transfer: %w", err)
-		}
-
-		// 1) Remove from txHash -> [primaryKeys] index
-		txHashKey := fmt.Sprintf("%s%s", txHashPrefix, tr.TxHash)
-		if err := removePrimaryKeyFromList(txn, txHashKey, string(key)); err != nil {
-			return fmt.Errorf("failed to remove from txHash index: %w", err)
-		}
-
-		// 2) Remove from the NFT-based index
-		nftIndexKey := fmt.Sprintf("%s%s:%s:%d:%d:%d:%s",
-			transferByNftPrefix,
-			tr.Contract,
-			tr.TokenID,
-			tr.BlockNumber,
-			tr.TransactionIndex,
-			tr.LogIndex,
-			tr.TxHash,
-		)
-		if err := txn.Delete([]byte(nftIndexKey)); err != nil && err != badger.ErrKeyNotFound {
-			return fmt.Errorf("failed to delete NFT index key: %w", err)
-		}
-
-		// 3) Remove from address-based index (from)
-		fromKey := fmt.Sprintf("%s%s:%d:%d:%d:%s",
-			transferByAddrPrefix,
-			tr.From,
-			tr.BlockNumber,
-			tr.TransactionIndex,
-			tr.LogIndex,
-			tr.TxHash,
-		)
-		if err := txn.Delete([]byte(fromKey)); err != nil && err != badger.ErrKeyNotFound {
-			return fmt.Errorf("failed to delete 'from' address index: %w", err)
-		}
-		// If from != to, remove the 'to' entry as well
-		if tr.From != tr.To {
-			toKey := fmt.Sprintf("%s%s:%d:%d:%d:%s",
-				transferByAddrPrefix,
-				tr.To,
-				tr.BlockNumber,
-				tr.TransactionIndex,
-				tr.LogIndex,
-				tr.TxHash,
-			)
-			if err := txn.Delete([]byte(toKey)); err != nil && err != badger.ErrKeyNotFound {
-				return fmt.Errorf("failed to delete 'to' address index: %w", err)
-			}
-		}
-
-		// 4) Finally remove the primary record
-		if err := txn.Delete(key); err != nil && err != badger.ErrKeyNotFound {
-			return fmt.Errorf("failed to delete primary record: %w", err)
-		}
-
-		// Because we've just deleted the current item, we must reposition iteration to its next key:
-		//   it.Seek(key)
-		// This ensures the iterator won't skip anything. Alternatively, we could store `it.Item().KeyCopy()`
-		// before deleting, but this approach is simpler if the data set isn't huge.
-		it.Seek(key)
+		// Otherwise, continue from the last key we left off on
+		currentKey = nextKey
 	}
+
 	return nil
 }
 

@@ -667,7 +667,7 @@ func (f *failingTransferDb) GetTransfersAfterCheckpoint(*badger.Txn, uint64, uin
 	}
 	return nil, nil
 }
-func (f *failingTransferDb) DeleteTransfersAfterCheckpoint(*badger.Txn, uint64, uint64, uint64) error {
+func (f *failingTransferDb) DeleteTransfersAfterCheckpoint(db *badger.DB, blockNumber uint64, txIndex uint64, logIndex uint64) error {
 	if f.deleteTransfersAfterCheckpointErr != nil {
 		return f.deleteTransfersAfterCheckpointErr
 	}
