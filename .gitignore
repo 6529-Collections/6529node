@@ -4,6 +4,7 @@ coverage.out
 coverage.html
 /db/
 dump.txt
+*.ignore
 
 # Ignore all .env files except config.example.env
 *.env

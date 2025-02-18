@@ -72,7 +72,6 @@ func main() {
 	const dbPath = "./db"
 	db, err := badger.Open(
 		badger.DefaultOptions(dbPath).
-			WithReadOnly(true).
 			WithLogger(nil),
 	)
 	if err != nil {

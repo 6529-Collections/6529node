@@ -117,18 +117,15 @@ func NewTdhTransfersReceivedActionImpl(ctx context.Context, progressTracker TdhI
 func (a *DefaultTdhTransfersReceivedAction) applyTransfer(
 	txn *badger.Txn,
 	transfer tokens.TokenTransfer,
-	storeTransfer bool,
 ) error {
-	// 1) Possibly store the transfer
-	if storeTransfer {
-		if err := a.transferDb.StoreTransfer(txn, transfer); err != nil {
-			zap.L().Error("Failed to store transfer", zap.Error(err))
-			return fmt.Errorf("failed to store transfer: %w", err)
-		}
+	// 1) Store the transfer
+	if err := a.transferDb.StoreTransfer(txn, transfer); err != nil {
+		zap.L().Error("Failed to store transfer", zap.Error(err))
+		return fmt.Errorf("failed to store transfer: %w", err)
 	}
 
 	// 2) Handle Minting / Burning
-	if transfer.Type == tokens.MINT {
+	if transfer.Type == tokens.MINT || transfer.Type == tokens.AIRDROP {
 		if err := a.nftDb.UpdateSupply(txn, transfer.Contract, transfer.TokenID, transfer.Amount); err != nil {
 			zap.L().Error("Failed to update NFT supply", zap.Error(err))
 			return fmt.Errorf("failed to update NFT supply: %w", err)
@@ -268,7 +265,9 @@ func (a *DefaultTdhTransfersReceivedAction) reset(
 }
 
 func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch tokens.TokenTransferBatch) error {
-	zap.L().Info("Processing transfers received action", zap.Int("transfers", len(transfersBatch.Transfers)))
+	if len(transfersBatch.Transfers) > 0 {
+		zap.L().Debug("Processing transfers received action", zap.Int("transfers", len(transfersBatch.Transfers)))
+	}
 
 	const batchSize = 100
 	numTransfers := len(transfersBatch.Transfers)
@@ -326,7 +325,7 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch tokens.TokenTr
 			}
 
 			for _, t := range chunk {
-				if err := a.applyTransfer(txn, t, true); err != nil {
+				if err := a.applyTransfer(txn, t); err != nil {
 					zap.L().Error("Failed to process transfer", zap.String("tx", t.TxHash), zap.Uint64("logIndex", t.LogIndex), zap.Error(err))
 					return err
 				}
@@ -354,11 +353,17 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch tokens.TokenTr
 			return err
 		}
 
-		zap.L().Debug("Batch processed",
-			zap.String("batch", fmt.Sprintf("%d/%d", batchIndex+1, numBatches)),
-			zap.Int("batchSize", len(chunk)),
-			zap.String(actionsReceivedCheckpointKey, lastProcessedValue),
-		)
+		if len(transfersBatch.Transfers) > 0 {
+			zap.L().Debug("Batch processed",
+				zap.String("batch", fmt.Sprintf("%d/%d", batchIndex+1, numBatches)),
+				zap.Int("batchSize", len(chunk)),
+				zap.String(actionsReceivedCheckpointKey, lastProcessedValue),
+			)
+		} else {
+			zap.L().Debug("Checkpoint saved",
+				zap.String(actionsReceivedCheckpointKey, lastProcessedValue),
+			)
+		}
 	}
 
 	if err := a.progressTracker.SetProgress(transfersBatch.BlockNumber); err != nil {

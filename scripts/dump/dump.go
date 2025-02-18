@@ -34,7 +34,7 @@ func main() {
 		out = os.Stdout // Default to console
 	}
 
-	db, err := badger.Open(badger.DefaultOptions(dbPath).WithReadOnly(true))
+	db, err := badger.Open(badger.DefaultOptions(dbPath))
 	if err != nil {
 		log.Fatalf("Failed to open BadgerDB: %v", err)
 	}

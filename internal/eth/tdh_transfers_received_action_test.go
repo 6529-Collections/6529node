@@ -818,7 +818,7 @@ func TestApplyTransfer_StoreTransferError(t *testing.T) {
 			Amount:           1,
 			Type:             tokens.MINT,
 		}
-		return action.applyTransfer(txn, transfer, true)
+		return action.applyTransfer(txn, transfer)
 	})
 	require.Error(t, txErr)
 	assert.Contains(t, txErr.Error(), "mock store error")
@@ -841,7 +841,7 @@ func TestApplyTransfer_UpdateSupplyError(t *testing.T) {
 			Amount:   10,
 			Type:     tokens.MINT,
 		}
-		return action.applyTransfer(txn, transfer, false)
+		return action.applyTransfer(txn, transfer)
 	})
 	require.Error(t, txErr)
 	assert.Contains(t, txErr.Error(), "mock updateSupply error")
@@ -864,7 +864,7 @@ func TestApplyTransfer_UpdateBurntSupplyError(t *testing.T) {
 			Amount:   2,
 			Type:     tokens.BURN,
 		}
-		return action.applyTransfer(txn, transfer, false)
+		return action.applyTransfer(txn, transfer)
 	})
 	require.Error(t, txErr)
 	assert.Contains(t, txErr.Error(), "mock burntSupply error")
@@ -887,7 +887,7 @@ func TestApplyTransfer_UpdateOwnershipError(t *testing.T) {
 			Amount:   1,
 			Type:     tokens.SEND,
 		}
-		return action.applyTransfer(txn, transfer, false)
+		return action.applyTransfer(txn, transfer)
 	})
 	require.Error(t, txErr)
 	assert.Contains(t, txErr.Error(), "mock updateOwnership error")
