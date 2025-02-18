@@ -6,6 +6,7 @@ import (
 
 	"github.com/6529-Collections/6529node/internal/eth/mocks"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
+	"github.com/stretchr/testify/mock"
 )
 
 func TestTdhTransfersReceivedAction_Handle(t *testing.T) {
@@ -14,7 +15,7 @@ func TestTdhTransfersReceivedAction_Handle(t *testing.T) {
 		ctx:             context.Background(),
 		progressTracker: progressTracker,
 	}
-	progressTracker.On("SetProgress", uint64(1)).Return(nil)
+	progressTracker.On("SetProgress", uint64(1), mock.Anything).Return(nil)
 	trBatch := tokens.TokenTransferBatch{
 		Transfers: []tokens.TokenTransfer{
 			{

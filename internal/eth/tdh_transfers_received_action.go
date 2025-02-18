@@ -41,7 +41,7 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfers tokens.TokenTransfe
 		)
 	}
 
-	err := a.progressTracker.SetProgress(transfers.BlockNumber)
+	err := a.progressTracker.SetProgress(transfers.BlockNumber, a.ctx)
 	if err != nil {
 		return fmt.Errorf("error setting progress: %w", err)
 	}

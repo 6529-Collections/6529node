@@ -2,6 +2,7 @@ package eth
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math/big"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/6529-Collections/6529node/internal/config"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
-	"github.com/dgraph-io/badger/v3"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -38,7 +38,7 @@ type DefaultTokensTransfersWatcher struct {
 	maxLogsInBatch   uint64
 }
 
-func NewTokensTransfersWatcher(db *badger.DB, ctx context.Context) (*DefaultTokensTransfersWatcher, error) {
+func NewTokensTransfersWatcher(db *sql.DB, ctx context.Context) (*DefaultTokensTransfersWatcher, error) {
 	ethClient, err := CreateEthClient()
 	if err != nil {
 		return nil, err
