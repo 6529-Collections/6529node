@@ -123,7 +123,7 @@ func (a *DefaultTdhTransfersReceivedAction) applyTransferReverse(
 	}
 
 	// 2) If it was a mint forward, revert minted supply
-	if transfer.Type == tokens.MINT {
+	if transfer.Type == tokens.MINT || transfer.Type == tokens.AIRDROP {
 		if err := a.nftDb.UpdateSupplyReverse(txn, transfer.Contract, transfer.TokenID, transfer.Amount); err != nil {
 			zap.L().Error("Failed to revert minted supply", zap.Error(err))
 			return fmt.Errorf("failed to revert minted supply: %w", err)

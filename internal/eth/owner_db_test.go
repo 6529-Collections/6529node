@@ -228,13 +228,13 @@ func TestOwnerDb_GetAllOwners(t *testing.T) {
 	err := db.Update(func(txn *badger.Txn) error {
 		// Just do direct setBalance for variety
 		impl := ownerDb.(*OwnerDbImpl)
-		if err := impl.setBalance(txn, "0xAlice", "contractX", "tokenFoo", 10); err != nil {
+		if err := impl.setBalance(txn, "0xAlice", "contractX:tokenFoo", 10); err != nil {
 			return err
 		}
-		if err := impl.setBalance(txn, "0xBob", "contractX", "tokenFoo", 5); err != nil {
+		if err := impl.setBalance(txn, "0xBob", "contractX:tokenFoo", 5); err != nil {
 			return err
 		}
-		if err := impl.setBalance(txn, "0xCarol", "contractY", "tokenBar", 20); err != nil {
+		if err := impl.setBalance(txn, "0xCarol", "contractY:tokenBar", 20); err != nil {
 			return err
 		}
 		return nil
@@ -278,7 +278,7 @@ func TestUpdateOwnership_DeleteKeyError(t *testing.T) {
 	defer txn.Discard()
 
 	ownerDb := &OwnerDbImpl{}
-	_ = ownerDb.setBalance(txn, "0xFrom", "0xContract", "1", 100) // Set initial balance
+	_ = ownerDb.setBalance(txn, "0xFrom", "0xContract:1", 100) // Set initial balance
 
 	// Close DB to force delete failure
 	db.Close()

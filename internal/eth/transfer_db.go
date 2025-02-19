@@ -63,14 +63,14 @@ func (t *TransferDbImpl) StoreTransfer(txn *badger.Txn, transfer tokens.TokenTra
 	//
 	// 1) Primary Key
 	//
-	primaryKey := fmt.Sprintf("%s%010d:%05d:%05d:%s:%s:%s",
+	padded := PaddedContractTokenID(transfer.Contract, transfer.TokenID)
+	primaryKey := fmt.Sprintf("%s%010d:%05d:%05d:%s:%s",
 		transferPrefix,
 		transfer.BlockNumber,
 		transfer.TransactionIndex,
 		transfer.LogIndex,
 		transfer.TxHash,
-		transfer.Contract,
-		transfer.TokenID,
+		padded,
 	)
 
 	value, err := json.Marshal(transfer)
@@ -115,10 +115,9 @@ func (t *TransferDbImpl) StoreTransfer(txn *badger.Txn, transfer tokens.TokenTra
 	// 3) NFT-based index
 	//    "tdh:transferByNft:{contract}:{tokenID}:{blockNumber}:{txIndex}:{logIndex}:{txHash}" => primaryKey
 	//
-	nftIndexKey := fmt.Sprintf("%s%s:%s:%d:%d:%d:%s",
+	nftIndexKey := fmt.Sprintf("%s%s:%d:%d:%d:%s",
 		transferByNftPrefix,
-		transfer.Contract,
-		transfer.TokenID,
+		padded,
 		transfer.BlockNumber,
 		transfer.TransactionIndex,
 		transfer.LogIndex,
@@ -257,6 +256,8 @@ func (t *TransferDbImpl) DeleteTransfersAfterCheckpoint(
 					return fmt.Errorf("failed to unmarshal transfer: %w", err)
 				}
 
+				padded := PaddedContractTokenID(tr.Contract, tr.TokenID)
+
 				// 1) Remove from txHash -> [primaryKeys] index
 				txHashKey := fmt.Sprintf("%s%s", txHashPrefix, tr.TxHash)
 				if err := removePrimaryKeyFromList(txn, txHashKey, string(key)); err != nil {
@@ -264,10 +265,9 @@ func (t *TransferDbImpl) DeleteTransfersAfterCheckpoint(
 				}
 
 				// 2) Remove from the NFT-based index
-				nftIndexKey := fmt.Sprintf("%s%s:%s:%d:%d:%d:%s",
+				nftIndexKey := fmt.Sprintf("%s%s:%d:%d:%d:%s",
 					transferByNftPrefix,
-					tr.Contract,
-					tr.TokenID,
+					padded,
 					tr.BlockNumber,
 					tr.TransactionIndex,
 					tr.LogIndex,
@@ -482,7 +482,8 @@ func (t *TransferDbImpl) GetTransfersByTxHash(txn *badger.Txn, txHash string) ([
 func (t *TransferDbImpl) GetTransfersByNft(txn *badger.Txn, contract, tokenID string) ([]tokens.TokenTransfer, error) {
 	var transfers []tokens.TokenTransfer
 
-	prefix := fmt.Sprintf("%s%s:%s:", transferByNftPrefix, contract, tokenID)
+	padded := PaddedContractTokenID(contract, tokenID)
+	prefix := fmt.Sprintf("%s%s:", transferByNftPrefix, padded)
 
 	it := txn.NewIterator(badger.DefaultIteratorOptions)
 	defer it.Close()

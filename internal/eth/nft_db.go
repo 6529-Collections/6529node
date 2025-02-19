@@ -282,7 +282,7 @@ func (n *NFTDbImpl) GetNftsByOwnerAddress(txn *badger.Txn, owner string) ([]NFT,
 	return nfts, nil
 }
 
-func nftKey(contract, tokenID string) string {
+func PaddedContractTokenID(contract, tokenID string) string {
 	switch contract {
 	case constants.GRADIENTS_CONTRACT:
 		tokenID = fmt.Sprintf("%03s", tokenID)
@@ -292,5 +292,10 @@ func nftKey(contract, tokenID string) string {
 
 	tokenID = strings.ReplaceAll(tokenID, " ", "0")
 
-	return fmt.Sprintf("%s%s:%s", nftPrefix, contract, tokenID)
+	return fmt.Sprintf("%s:%s", contract, tokenID)
+}
+
+func nftKey(contract, tokenID string) string {
+	padded := PaddedContractTokenID(contract, tokenID)
+	return fmt.Sprintf("%s%s", nftPrefix, padded)
 }

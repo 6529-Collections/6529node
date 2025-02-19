@@ -7,6 +7,7 @@ import (
 
 	"github.com/6529-Collections/6529node/pkg/constants"
 	"github.com/dgraph-io/badger/v4"
+	"go.uber.org/zap"
 )
 
 /*
@@ -46,6 +47,8 @@ func (o *OwnerDbImpl) UpdateOwnership(txn *badger.Txn, from, to, contract, token
 		return errors.New("transfer error: amount must be positive")
 	}
 
+	padded := PaddedContractTokenID(contract, tokenID)
+
 	// Deduct from sender
 	if from != constants.NULL_ADDRESS {
 		fromBalance, err := o.GetBalance(txn, from, contract, tokenID)
@@ -59,18 +62,18 @@ func (o *OwnerDbImpl) UpdateOwnership(txn *badger.Txn, from, to, contract, token
 		newFromBalance := fromBalance - amount
 		if newFromBalance == 0 {
 			// Remove the key if balance is zero
-			err = txn.Delete([]byte(fmt.Sprintf("%s%s:%s:%s", ownerPrefix, from, contract, tokenID)))
+			err = txn.Delete([]byte(fmt.Sprintf("%s%s:%s", ownerPrefix, from, padded)))
 			if err != nil {
 				return err
 			}
 			// Also remove from NFT->owners index
-			err = txn.Delete([]byte(fmt.Sprintf("%s%s:%s:%s", nftOwnersPrefix, contract, tokenID, from)))
+			err = txn.Delete([]byte(fmt.Sprintf("%s%s:%s", nftOwnersPrefix, padded, from)))
 			if err != nil {
 				return err
 			}
 		} else {
 			// Update the balance
-			err = o.setBalance(txn, from, contract, tokenID, newFromBalance)
+			err = o.setBalance(txn, from, padded, newFromBalance)
 			if err != nil {
 				return err
 			}
@@ -84,7 +87,7 @@ func (o *OwnerDbImpl) UpdateOwnership(txn *badger.Txn, from, to, contract, token
 			return err
 		}
 		newToBalance := toBalance + amount
-		return o.setBalance(txn, to, contract, tokenID, newToBalance)
+		return o.setBalance(txn, to, padded, newToBalance)
 	}
 
 	// If `to` is the null address, we effectively "burn" them (no balance to maintain).
@@ -97,6 +100,8 @@ func (o *OwnerDbImpl) UpdateOwnershipReverse(txn *badger.Txn, from, to, contract
 		return errors.New("reverse transfer error: amount must be positive")
 	}
 
+	padded := PaddedContractTokenID(contract, tokenID)
+
 	// In a forward scenario, 'from->to' was done.
 	// So reversing means we do 'to->from' by removing tokens from 'to' and adding to 'from'.
 
@@ -107,24 +112,25 @@ func (o *OwnerDbImpl) UpdateOwnershipReverse(txn *badger.Txn, from, to, contract
 			return err
 		}
 		if toBalance < amount {
+			zap.L().Error("hi i am reverse transfer error: insufficient balance at 'to' address", zap.String("to", to), zap.String("contract", contract), zap.String("tokenID", tokenID), zap.Int64("amount", amount), zap.Int64("toBalance", toBalance))
 			return errors.New("reverse transfer error: insufficient balance at 'to' address")
 		}
 
 		newToBalance := toBalance - amount
 		if newToBalance == 0 {
 			// Remove the key if balance is zero
-			err = txn.Delete([]byte(fmt.Sprintf("%s%s:%s:%s", ownerPrefix, to, contract, tokenID)))
+			err = txn.Delete([]byte(fmt.Sprintf("%s%s:%s", ownerPrefix, to, padded)))
 			if err != nil {
 				return err
 			}
 			// Also remove from NFT->owners index
-			err = txn.Delete([]byte(fmt.Sprintf("%s%s:%s:%s", nftOwnersPrefix, contract, tokenID, to)))
+			err = txn.Delete([]byte(fmt.Sprintf("%s%s:%s", nftOwnersPrefix, padded, to)))
 			if err != nil {
 				return err
 			}
 		} else {
 			// Update the balance
-			if err := o.setBalance(txn, to, contract, tokenID, newToBalance); err != nil {
+			if err := o.setBalance(txn, to, padded, newToBalance); err != nil {
 				return err
 			}
 		}
@@ -137,7 +143,7 @@ func (o *OwnerDbImpl) UpdateOwnershipReverse(txn *badger.Txn, from, to, contract
 			return err
 		}
 		newFromBalance := fromBalance + amount
-		if err := o.setBalance(txn, from, contract, tokenID, newFromBalance); err != nil {
+		if err := o.setBalance(txn, from, padded, newFromBalance); err != nil {
 			return err
 		}
 	}
@@ -148,7 +154,8 @@ func (o *OwnerDbImpl) UpdateOwnershipReverse(txn *badger.Txn, from, to, contract
 
 // GetBalance returns the balance for owner->(contract,tokenID).
 func (o *OwnerDbImpl) GetBalance(txn *badger.Txn, owner, contract, tokenID string) (int64, error) {
-	key := fmt.Sprintf("%s%s:%s:%s", ownerPrefix, owner, contract, tokenID)
+	padded := PaddedContractTokenID(contract, tokenID)
+	key := fmt.Sprintf("%s%s:%s", ownerPrefix, owner, padded)
 	item, err := txn.Get([]byte(key))
 	if err == badger.ErrKeyNotFound {
 		return 0, nil
@@ -168,11 +175,11 @@ func (o *OwnerDbImpl) GetBalance(txn *badger.Txn, owner, contract, tokenID strin
 }
 
 // setBalance updates both the 'owner->NFT' key and the 'NFT->owners' key.
-func (o *OwnerDbImpl) setBalance(txn *badger.Txn, owner, contract, tokenID string, amount int64) error {
+func (o *OwnerDbImpl) setBalance(txn *badger.Txn, owner, padded string, amount int64) error {
 	// 1) Owner-based key
-	ownerKey := fmt.Sprintf("%s%s:%s:%s", ownerPrefix, owner, contract, tokenID)
+	ownerKey := fmt.Sprintf("%s%s:%s", ownerPrefix, owner, padded)
 	// 2) NFT-based key
-	nftOwnerKey := fmt.Sprintf("%s%s:%s:%s", nftOwnersPrefix, contract, tokenID, owner)
+	nftOwnerKey := fmt.Sprintf("%s%s:%s", nftOwnersPrefix, padded, owner)
 
 	value, err := json.Marshal(amount)
 	if err != nil {
@@ -192,7 +199,8 @@ func (o *OwnerDbImpl) setBalance(txn *badger.Txn, owner, contract, tokenID strin
 // GetOwnersByNft scans the 'tdh:nftowners:{contract}:{tokenID}:' prefix
 // to find all owners of a given NFT.
 func (o *OwnerDbImpl) GetOwnersByNft(txn *badger.Txn, contract, tokenID string) (map[string]int64, error) {
-	prefix := []byte(fmt.Sprintf("%s%s:%s:", nftOwnersPrefix, contract, tokenID))
+	padded := PaddedContractTokenID(contract, tokenID)
+	prefix := []byte(fmt.Sprintf("%s%s:", nftOwnersPrefix, padded))
 
 	owners := make(map[string]int64)
 	it := txn.NewIterator(badger.DefaultIteratorOptions)
