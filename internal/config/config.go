@@ -18,6 +18,7 @@ type Config struct {
 	TdhMaxLogsInBatch        uint64 `mapstructure:"TDH_MAX_LOGS_IN_BATCH"`
 	P2PBootstrapAddr         string `mapstructure:"P2P_BOOTSTRAP_ADDR"`
 	MaxTransportConcurrency  int    `mapstructure:"MAX_TRANSPORT_CONCURRENCY"`
+	RPCPort                  int    `mapstructure:"RPC_PORT"`
 }
 
 var lock = &sync.Mutex{}
@@ -50,6 +51,7 @@ func viperAddConfigFile() {
 	viper.SetConfigName("config")
 	viper.SetConfigType("env")
 	viper.SetDefault("MAX_TRANSPORT_CONCURRENCY", 10)
+	viper.SetDefault("RPC_PORT", 8080)
 }
 
 func viperAddEnv() {
