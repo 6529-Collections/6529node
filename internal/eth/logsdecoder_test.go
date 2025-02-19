@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
+	"github.com/6529-Collections/6529node/pkg/tdh/models"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/stretchr/testify/require"
@@ -293,7 +293,7 @@ func TestDefaultEthTransactionLogsDecoder_Decode(t *testing.T) {
 		res := decoder.Decode(logs)
 		require.Len(t, res, 2, "Expect two block groups (block 100 and block 101)")
 
-		var block100Transfers, block101Transfers []tokens.TokenTransfer
+		var block100Transfers, block101Transfers []models.TokenTransfer
 		for _, group := range res {
 			if len(group) > 0 {
 				if group[0].BlockNumber == 100 {

@@ -2,6 +2,7 @@ package eth
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math/big"
@@ -9,8 +10,8 @@ import (
 	"time"
 
 	"github.com/6529-Collections/6529node/internal/config"
-	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
-	"github.com/dgraph-io/badger/v4"
+	"github.com/6529-Collections/6529node/internal/eth/ethdb"
+	"github.com/6529-Collections/6529node/pkg/tdh/models"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -23,7 +24,7 @@ type TokensTransfersWatcher interface {
 	WatchTransfers(
 		contracts []string,
 		startBlock uint64,
-		transfersChan chan<- tokens.TokenTransferBatch,
+		transfersChan chan<- models.TokenTransferBatch,
 		tipReachedChan chan<- bool,
 	) error
 }
@@ -32,13 +33,13 @@ type DefaultTokensTransfersWatcher struct {
 	ctx              context.Context
 	client           EthClient
 	decoder          EthTransactionLogsDecoder
-	blockTracker     BlockHashDb
+	blockTracker     ethdb.BlockHashDb
 	salesDetector    SalesDetector
 	maxBlocksInBatch uint64
 	maxLogsInBatch   uint64
 }
 
-func NewTokensTransfersWatcher(db *badger.DB, ctx context.Context) (*DefaultTokensTransfersWatcher, error) {
+func NewTokensTransfersWatcher(db *sql.DB, ctx context.Context) (*DefaultTokensTransfersWatcher, error) {
 	ethClient, err := CreateEthClient()
 	if err != nil {
 		return nil, err
@@ -55,7 +56,7 @@ func NewTokensTransfersWatcher(db *badger.DB, ctx context.Context) (*DefaultToke
 		ctx:              ctx,
 		client:           ethClient,
 		decoder:          NewDefaultEthTransactionLogsDecoder(),
-		blockTracker:     NewBlockHashDb(db),
+		blockTracker:     ethdb.NewBlockHashDb(db),
 		salesDetector:    NewDefaultSalesDetector(ethClient),
 		maxBlocksInBatch: maxBlocksInBatch,
 		maxLogsInBatch:   maxLogsInBatch,
@@ -65,7 +66,7 @@ func NewTokensTransfersWatcher(db *badger.DB, ctx context.Context) (*DefaultToke
 func (w *DefaultTokensTransfersWatcher) WatchTransfers(
 	contracts []string,
 	startBlock uint64,
-	transfersChan chan<- tokens.TokenTransferBatch,
+	transfersChan chan<- models.TokenTransferBatch,
 	tipReachedChan chan<- bool,
 ) error {
 	defer w.client.Close()
@@ -131,7 +132,7 @@ func (w *DefaultTokensTransfersWatcher) WatchTransfers(
 func (w *DefaultTokensTransfersWatcher) pollForNewBlocks(
 	contractAddrs []common.Address,
 	currentBlock *uint64,
-	transfersChan chan<- tokens.TokenTransferBatch,
+	transfersChan chan<- models.TokenTransferBatch,
 ) error {
 	for {
 		if w.ctx.Err() != nil {
@@ -181,7 +182,7 @@ func (w *DefaultTokensTransfersWatcher) subscribeAndProcessHeads(
 	newHeads <-chan *types.Header,
 	contractAddrs []common.Address,
 	currentBlock *uint64,
-	transfersChan chan<- tokens.TokenTransferBatch,
+	transfersChan chan<- models.TokenTransferBatch,
 ) error {
 	defer sub.Unsubscribe()
 
@@ -232,7 +233,7 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 	contractAddrs []common.Address,
 	startBlock, endBlock uint64,
 	maxLogsThreshold int,
-	transfersChan chan<- tokens.TokenTransferBatch,
+	transfersChan chan<- models.TokenTransferBatch,
 ) error {
 	if startBlock > endBlock {
 		return nil
@@ -276,12 +277,12 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 
 	decodedByBlock := w.decoder.Decode(logs)
 
-	var allTransfers []tokens.TokenTransfer
+	var allTransfers []models.TokenTransfer
 	for _, perBlockTransfers := range decodedByBlock {
 		allTransfers = append(allTransfers, perBlockTransfers...)
 	}
 
-	txMap := make(map[common.Hash][]*tokens.TokenTransfer)
+	txMap := make(map[common.Hash][]*models.TokenTransfer)
 	for i := range allTransfers {
 		txHash := common.HexToHash(allTransfers[i].TxHash)
 		txMap[txHash] = append(txMap[txHash], &allTransfers[i])
@@ -301,7 +302,7 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 
 	if len(blockGroups) == 0 {
 		select {
-		case transfersChan <- tokens.TokenTransferBatch{
+		case transfersChan <- models.TokenTransferBatch{
 			Transfers:   nil,
 			BlockNumber: endBlock,
 		}:
@@ -317,7 +318,7 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 	}
 	sort.Slice(blocksWithLogs, func(i, j int) bool { return blocksWithLogs[i] < blocksWithLogs[j] })
 
-	var finalTransfers []tokens.TokenTransfer
+	var finalTransfers []models.TokenTransfer
 
 	for _, b := range blocksWithLogs {
 		header, err := w.client.HeaderByNumber(w.ctx, big.NewInt(int64(b)))
@@ -355,7 +356,7 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 	}
 
 	select {
-	case transfersChan <- tokens.TokenTransferBatch{
+	case transfersChan <- models.TokenTransferBatch{
 		Transfers:   finalTransfers,
 		BlockNumber: endBlock,
 	}:
@@ -365,8 +366,8 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 	return nil
 }
 
-func deref(xfers []*tokens.TokenTransfer) []tokens.TokenTransfer {
-	derefed := make([]tokens.TokenTransfer, len(xfers))
+func deref(xfers []*models.TokenTransfer) []models.TokenTransfer {
+	derefed := make([]models.TokenTransfer, len(xfers))
 	for i, xfer := range xfers {
 		derefed[i] = *xfer
 	}
@@ -442,8 +443,8 @@ func (w *DefaultTokensTransfersWatcher) fetchLogsInRange(
 	return w.client.FilterLogs(w.ctx, query)
 }
 
-func groupLogsByBlock(decoded []tokens.TokenTransfer) map[uint64][]tokens.TokenTransfer {
-	groups := make(map[uint64][]tokens.TokenTransfer)
+func groupLogsByBlock(decoded []models.TokenTransfer) map[uint64][]models.TokenTransfer {
+	groups := make(map[uint64][]models.TokenTransfer)
 	for _, t := range decoded {
 		groups[t.BlockNumber] = append(groups[t.BlockNumber], t)
 	}

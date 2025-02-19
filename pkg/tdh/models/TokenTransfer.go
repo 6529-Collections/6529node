@@ -1,4 +1,4 @@
-package tokens
+package models
 
 type TransferType string
 
@@ -31,4 +31,11 @@ type TokenTransfer struct {
 type TokenTransferBatch struct {
 	Transfers   []TokenTransfer
 	BlockNumber uint64
+}
+
+type TokenTransferCheckpoint struct {
+	ID               int64
+	BlockNumber      uint64
+	TransactionIndex uint64
+	LogIndex         uint64
 }

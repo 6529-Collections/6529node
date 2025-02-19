@@ -8,7 +8,7 @@ import (
 	mocks "github.com/6529-Collections/6529node/internal/eth/mocks"
 	transferwatcher "github.com/6529-Collections/6529node/internal/eth/mocks/transferwatcher"
 	"github.com/6529-Collections/6529node/pkg/constants"
-	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
+	"github.com/6529-Collections/6529node/pkg/tdh/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"go.uber.org/zap"
@@ -35,11 +35,11 @@ func TestTdhContractsListener_Listen_ProgressGreaterThanEpochBlock(t *testing.T)
 		).
 		Return(nil).
 		Run(func(args mock.Arguments) {
-			batchChan := args.Get(2).(chan<- tokens.TokenTransferBatch)
+			batchChan := args.Get(2).(chan<- models.TokenTransferBatch)
 
-			batchChan <- tokens.TokenTransferBatch{
+			batchChan <- models.TokenTransferBatch{
 				BlockNumber: 13360878,
-				Transfers: []tokens.TokenTransfer{
+				Transfers: []models.TokenTransfer{
 					{From: "0x111", To: "0x222"},
 				},
 			}
@@ -48,9 +48,9 @@ func TestTdhContractsListener_Listen_ProgressGreaterThanEpochBlock(t *testing.T)
 		})
 
 	mTransfersAction.
-		On("Handle", tokens.TokenTransferBatch{
+		On("Handle", models.TokenTransferBatch{
 			BlockNumber: 13360878,
-			Transfers:   []tokens.TokenTransfer{{From: "0x111", To: "0x222"}},
+			Transfers:   []models.TokenTransfer{{From: "0x111", To: "0x222"}},
 		}).
 		Return(nil).
 		Once()
@@ -89,7 +89,7 @@ func TestTdhContractsListener_Listen_ProgressLessThanEpochBlock(t *testing.T) {
 		).
 		Return(nil).
 		Run(func(args mock.Arguments) {
-			batchChan := args.Get(2).(chan<- tokens.TokenTransferBatch)
+			batchChan := args.Get(2).(chan<- models.TokenTransferBatch)
 			close(batchChan)
 		})
 
@@ -188,18 +188,18 @@ func TestTdhContractsListener_Listen_HandleErrorStopsLoop(t *testing.T) {
 		).
 		Return(nil).
 		Run(func(args mock.Arguments) {
-			batchChan := args.Get(2).(chan<- tokens.TokenTransferBatch)
+			batchChan := args.Get(2).(chan<- models.TokenTransferBatch)
 
-			batchChan <- tokens.TokenTransferBatch{
+			batchChan <- models.TokenTransferBatch{
 				BlockNumber: 13360860,
-				Transfers: []tokens.TokenTransfer{
+				Transfers: []models.TokenTransfer{
 					{From: "0xBAD"},
 				},
 			}
 
-			batchChan <- tokens.TokenTransferBatch{
+			batchChan <- models.TokenTransferBatch{
 				BlockNumber: 13360860,
-				Transfers: []tokens.TokenTransfer{
+				Transfers: []models.TokenTransfer{
 					{From: "0xGOOD"},
 				},
 			}
@@ -208,16 +208,16 @@ func TestTdhContractsListener_Listen_HandleErrorStopsLoop(t *testing.T) {
 		}).
 		Once()
 
-	mTransfersAction.On("Handle", tokens.TokenTransferBatch{
+	mTransfersAction.On("Handle", models.TokenTransferBatch{
 		BlockNumber: 13360860,
-		Transfers:   []tokens.TokenTransfer{{From: "0xBAD"}},
+		Transfers:   []models.TokenTransfer{{From: "0xBAD"}},
 	}).
 		Return(errors.New("some handle error")).
 		Once()
 
-	mTransfersAction.On("Handle", tokens.TokenTransferBatch{
+	mTransfersAction.On("Handle", models.TokenTransferBatch{
 		BlockNumber: 13360860,
-		Transfers:   []tokens.TokenTransfer{{From: "0xGOOD"}},
+		Transfers:   []models.TokenTransfer{{From: "0xGOOD"}},
 	}).
 		Return(nil).
 		Once()
@@ -234,7 +234,7 @@ func TestTdhContractsListener_Listen_HandleErrorStopsLoop(t *testing.T) {
 	assert.Error(t, err, "Listen should fail if Handle fails")
 
 	// Ensure Handle() for 0xGOOD was never called
-	mTransfersAction.AssertNotCalled(t, "Handle", []tokens.TokenTransfer{{From: "0xGOOD"}})
+	mTransfersAction.AssertNotCalled(t, "Handle", []models.TokenTransfer{{From: "0xGOOD"}})
 
 	mIdxTracker.AssertExpectations(t)
 	mTransfersWatcher.AssertExpectations(t)

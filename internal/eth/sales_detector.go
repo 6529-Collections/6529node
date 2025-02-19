@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/6529-Collections/6529node/pkg/constants"
-	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
+	"github.com/6529-Collections/6529node/pkg/tdh/models"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -16,7 +16,7 @@ import (
 )
 
 type SalesDetector interface {
-	DetectIfSale(ctx context.Context, txHash common.Hash, nftTransfers []tokens.TokenTransfer) (map[int]tokens.TransferType, error)
+	DetectIfSale(ctx context.Context, txHash common.Hash, nftTransfers []models.TokenTransfer) (map[int]models.TransferType, error)
 }
 
 type DefaultSalesDetector struct {
@@ -935,20 +935,20 @@ func NewDefaultSalesDetector(client EthClient) *DefaultSalesDetector {
 func (d *DefaultSalesDetector) DetectIfSale(
 	ctx context.Context,
 	txHash common.Hash,
-	nftTransfers []tokens.TokenTransfer,
-) (map[int]tokens.TransferType, error) {
+	nftTransfers []models.TokenTransfer,
+) (map[int]models.TransferType, error) {
 
-	result := make(map[int]tokens.TransferType, len(nftTransfers))
+	result := make(map[int]models.TransferType, len(nftTransfers))
 	for i, tr := range nftTransfers {
 		fromLower := strings.ToLower(tr.From)
 		toLower := strings.ToLower(tr.To)
 		switch {
 		case fromLower == constants.NULL_ADDRESS:
-			result[i] = tokens.MINT
+			result[i] = models.MINT
 		case toLower == constants.NULL_ADDRESS || toLower == constants.DEAD_ADDRESS:
-			result[i] = tokens.BURN
+			result[i] = models.BURN
 		default:
-			result[i] = tokens.SEND
+			result[i] = models.SEND
 		}
 	}
 
@@ -967,14 +967,14 @@ func (d *DefaultSalesDetector) DetectIfSale(
 
 	if isSale {
 		for i := range nftTransfers {
-			if result[i] == tokens.SEND {
-				result[i] = tokens.SALE
+			if result[i] == models.SEND {
+				result[i] = models.SALE
 			}
 		}
 	} else {
 		for i := range nftTransfers {
-			if result[i] == tokens.MINT {
-				result[i] = tokens.AIRDROP
+			if result[i] == models.MINT {
+				result[i] = models.AIRDROP
 			}
 		}
 	}
@@ -985,7 +985,7 @@ func (d *DefaultSalesDetector) DetectIfSale(
 func (d *DefaultSalesDetector) hasAnySaleIndicators(
 	ctx context.Context,
 	receipt *types.Receipt,
-	nftTransfers []tokens.TokenTransfer,
+	nftTransfers []models.TokenTransfer,
 ) (bool, error) {
 
 	if receipt.Status == types.ReceiptStatusSuccessful && receipt.TxHash != (common.Hash{}) {
@@ -1088,7 +1088,7 @@ type ReceivedItem struct {
 
 func matchesNFTTransfers(
 	fulfilled *SeaportOrderFulfilled,
-	nftTransfers []tokens.TokenTransfer,
+	nftTransfers []models.TokenTransfer,
 ) (bool, error) {
 
 	for _, tr := range nftTransfers {

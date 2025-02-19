@@ -2,22 +2,23 @@ package tdh
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/6529-Collections/6529node/internal/eth"
+	"github.com/6529-Collections/6529node/internal/eth/ethdb"
 	"github.com/6529-Collections/6529node/pkg/constants"
-	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
-	"github.com/dgraph-io/badger/v4"
+	"github.com/6529-Collections/6529node/pkg/tdh/models"
 	"go.uber.org/zap"
 )
 
 type TdhContractsListener struct {
 	transfersWatcher        eth.TokensTransfersWatcher
 	transfersReceivedAction eth.TdhTransfersReceivedAction
-	progressTracker         eth.TdhIdxTrackerDb
+	progressTracker         ethdb.TdhIdxTrackerDb
 }
 
 func (client TdhContractsListener) listen(tipReachedChan chan<- bool) error {
-	nftActionsChan := make(chan tokens.TokenTransferBatch)
+	nftActionsChan := make(chan models.TokenTransferBatch)
 	errChan := make(chan error, 1)
 
 	go func() {
@@ -41,15 +42,6 @@ func (client TdhContractsListener) listen(tipReachedChan chan<- bool) error {
 	if startBlock < constants.TDH_CONTRACTS_EPOCH_BLOCK {
 		startBlock = constants.TDH_CONTRACTS_EPOCH_BLOCK
 	}
-	latestBlockChannel := make(chan uint64)
-	go func() {
-		for latestBlock := range latestBlockChannel {
-			err := client.progressTracker.SetProgress(latestBlock)
-			if err != nil {
-				zap.L().Error("Error setting progress", zap.Error(err))
-			}
-		}
-	}()
 
 	// Start transfers watching in a separate goroutine
 	done := make(chan error, 1)
@@ -75,21 +67,21 @@ func (client TdhContractsListener) listen(tipReachedChan chan<- bool) error {
 	}
 }
 
-func BlockUntilOnTipAndKeepListeningAsync(badger *badger.DB, ctx context.Context) error {
+func BlockUntilOnTipAndKeepListeningAsync(db *sql.DB, ctx context.Context) error {
 	tdhSynchroniserFatalErrors := make(chan error, 10)
 	go func() {
 		for err := range tdhSynchroniserFatalErrors {
 			zap.L().Fatal("Fatal error listening on TDH contracts", zap.Error(err))
 		}
 	}()
-	transfersWatcher, err := eth.NewTokensTransfersWatcher(badger, ctx)
+	transfersWatcher, err := eth.NewTokensTransfersWatcher(db, ctx)
 	if err != nil {
 		return err
 	}
-	progressTracker := eth.NewTdhIdxTrackerDb(badger)
+	progressTracker := ethdb.NewTdhIdxTrackerDb(db)
 	listener := &TdhContractsListener{
 		transfersWatcher:        transfersWatcher,
-		transfersReceivedAction: eth.NewTdhTransfersReceivedActionImpl(ctx, progressTracker, badger),
+		transfersReceivedAction: eth.NewTdhTransfersReceivedActionImpl(ctx, db, progressTracker),
 		progressTracker:         progressTracker,
 	}
 	tipReachedChan := make(chan bool, 10)

@@ -1,30 +1,19 @@
-package eth
+package ethdb
 
 import (
 	"fmt"
 	"math/big"
-	"os"
 	"testing"
 
-	"github.com/6529-Collections/6529node/internal/db"
+	"github.com/6529-Collections/6529node/internal/db/testdb"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func setupTestDB(t *testing.T) (*BlockHashDbImpl, func()) {
-	tmpDir, err := os.MkdirTemp("", "badger-test-*")
-	require.NoError(t, err)
-
-	badgerDB, err := db.OpenBadger(tmpDir)
-	require.NoError(t, err)
-
-	cleanup := func() {
-		badgerDB.Close()
-		os.RemoveAll(tmpDir)
-	}
-
-	return &BlockHashDbImpl{db: badgerDB}, cleanup
+func setupTestDB(t *testing.T) (BlockHashDb, func()) {
+	db, cleanup := testdb.SetupTestDB(t)
+	return NewBlockHashDb(db), cleanup
 }
 
 func TestBlockHashDb_SetAndGetHash(t *testing.T) {
@@ -142,21 +131,4 @@ func TestBlockHashDb_ConcurrentAccess(t *testing.T) {
 
 	<-done
 	<-done
-}
-
-func TestEncodeDecodeKey(t *testing.T) {
-	testCases := []uint64{
-		0,
-		1,
-		1000,
-		^uint64(0), // max uint64
-	}
-
-	for _, tc := range testCases {
-		encoded := encodeKey(tc)
-		decoded := decodeKey(encoded)
-		assert.Equal(t, tc, decoded, "Encode/decode mismatch for value %d", tc)
-		assert.True(t, len(encoded) > len(blockHashPrefix),
-			"Encoded key should be longer than prefix")
-	}
 }

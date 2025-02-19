@@ -2,8 +2,7 @@ ignore:
   - "cmd/node/main.go"
   - "internal/eth/mocks"
   - "internal/network/mocks"
-  - "scripts/db_local_compare"
-  - "scripts/dump"
+  - "internal/db"
 coverage:
   status:
     project:

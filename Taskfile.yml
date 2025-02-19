@@ -20,16 +20,6 @@ tasks:
     cmds:
       - go run ./cmd/node
 
-  dump-db:
-    desc: Dump the BadgerDB
-    cmds:
-      - go run ./scripts/dump/dump.go {{.CLI_ARGS | default ""}}
-
-  db_local_compare:
-    desc: Compare the BadgerDB with the local SQLite DB
-    cmds:
-      - go run ./scripts/db_local_compare/db_local_compare.go {{.CLI_ARGS | default ""}}
-
   test:
     desc: Run all tests
     cmds:
