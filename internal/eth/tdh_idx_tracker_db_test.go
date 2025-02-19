@@ -1,29 +1,19 @@
 package eth
 
 import (
+	"context"
 	"math/big"
-	"os"
 	"sync"
 	"testing"
 
-	"github.com/6529-Collections/6529node/internal/db"
+	"github.com/6529-Collections/6529node/internal/db/testdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func setupTestTdhIdxTrackerDb(t *testing.T) (*TdhIdxTrackerDbImpl, func()) {
-	tmpDir, err := os.MkdirTemp("", "badger-test-*")
-	require.NoError(t, err)
-
-	badgerDB, err := db.OpenBadger(tmpDir)
-	require.NoError(t, err)
-
-	cleanup := func() {
-		badgerDB.Close()
-		os.RemoveAll(tmpDir)
-	}
-
-	return &TdhIdxTrackerDbImpl{db: badgerDB}, cleanup
+func setupTestTdhIdxTrackerDb(t *testing.T) (TdhIdxTrackerDb, func()) {
+	db, cleanup := testdb.SetupTestDB(t)
+	return NewTdhIdxTrackerDb(db), cleanup
 }
 
 func TestTdhIdxTrackerDb_GetProgress_KeyNotFound(t *testing.T) {
@@ -40,7 +30,7 @@ func TestTdhIdxTrackerDb_SetAndGetProgress(t *testing.T) {
 	defer cleanup()
 
 	var blockNum uint64 = 42
-	err := tdhDb.SetProgress(blockNum)
+	err := tdhDb.SetProgress(blockNum, context.Background())
 	require.NoError(t, err, "SetProgress should not fail")
 
 	retrieved, err := tdhDb.GetProgress()
@@ -52,17 +42,17 @@ func TestTdhIdxTrackerDb_OverwriteProgress(t *testing.T) {
 	tdhDb, cleanup := setupTestTdhIdxTrackerDb(t)
 	defer cleanup()
 
-	err := tdhDb.SetProgress(100)
+	err := tdhDb.SetProgress(100, context.Background())
 	require.NoError(t, err)
 
-	err = tdhDb.SetProgress(50)
+	err = tdhDb.SetProgress(50, context.Background())
 	require.NoError(t, err)
 
 	progress, err := tdhDb.GetProgress()
 	require.NoError(t, err)
 	assert.Equal(t, uint64(50), progress, "Progress should update to the new value")
 
-	err = tdhDb.SetProgress(999999)
+	err = tdhDb.SetProgress(999999, context.Background())
 	require.NoError(t, err)
 
 	progress, err = tdhDb.GetProgress()
@@ -80,7 +70,7 @@ func TestTdhIdxTrackerDb_ConcurrentAccess(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 100; i++ {
-			err := tdhDb.SetProgress(uint64(i))
+			err := tdhDb.SetProgress(uint64(i), context.Background())
 			assert.NoError(t, err)
 		}
 	}()
@@ -98,7 +88,7 @@ func TestTdhIdxTrackerDb_ConcurrentAccess(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 100; i < 200; i++ {
-			err := tdhDb.SetProgress(uint64(i))
+			err := tdhDb.SetProgress(uint64(i), context.Background())
 			assert.NoError(t, err)
 			val, err := tdhDb.GetProgress()
 			assert.NoError(t, err)
@@ -118,10 +108,9 @@ func TestTdhIdxTrackerDb_SetProgress_ErrorHandling(t *testing.T) {
 
 	tdhDb, cleanup := setupTestTdhIdxTrackerDb(t)
 
-	tdhDb.db.Close()
 	cleanup()
 
-	err := tdhDb.SetProgress(777)
+	err := tdhDb.SetProgress(777, context.Background())
 	assert.Error(t, err, "Expected an error when trying to write to a closed DB")
 
 	_, err = tdhDb.GetProgress()
@@ -133,7 +122,7 @@ func TestTdhIdxTrackerDb_BigNumbers(t *testing.T) {
 	defer cleanup()
 
 	bigVal := new(big.Int).SetUint64(1<<61 + 1234567)
-	err := tdhDb.SetProgress(bigVal.Uint64())
+	err := tdhDb.SetProgress(bigVal.Uint64(), context.Background())
 	require.NoError(t, err)
 
 	retrieved, err := tdhDb.GetProgress()

@@ -2,10 +2,10 @@ package tdh
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/6529-Collections/6529node/internal/eth"
 	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
-	"github.com/dgraph-io/badger/v3"
 	"go.uber.org/zap"
 )
 
@@ -54,18 +54,18 @@ func (client TdhContractsListener) listen(tipReachedChan chan<- bool) error {
 	)
 }
 
-func BlockUntilOnTipAndKeepListeningAsync(badger *badger.DB, ctx context.Context) error {
+func BlockUntilOnTipAndKeepListeningAsync(db *sql.DB, ctx context.Context) error {
 	tdhSynchroniserFatalErrors := make(chan error, 10)
 	go func() {
 		for err := range tdhSynchroniserFatalErrors {
 			zap.L().Fatal("Fatal error listening on TDH contracts", zap.Error(err))
 		}
 	}()
-	transfersWatcher, err := eth.NewTokensTransfersWatcher(badger, ctx)
+	transfersWatcher, err := eth.NewTokensTransfersWatcher(db, ctx)
 	if err != nil {
 		return err
 	}
-	progressTracker := eth.NewTdhIdxTrackerDb(badger)
+	progressTracker := eth.NewTdhIdxTrackerDb(db)
 	listener := &TdhContractsListener{
 		transfersWatcher:        transfersWatcher,
 		transfersReceivedAction: eth.NewDefaultTdhTransfersReceivedAction(ctx, progressTracker),

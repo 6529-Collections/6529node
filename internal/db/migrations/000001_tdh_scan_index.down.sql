@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS tdh_scan_index;

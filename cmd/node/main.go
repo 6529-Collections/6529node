@@ -26,12 +26,12 @@ func init() {
 func main() {
 	zap.L().Info("Starting 6529-Collections/6529node...", zap.String("Version", Version))
 
-	badger, err := db.OpenBadger("./db")
+	sqlite, err := db.OpenSqlite("./db/sqlite/sqlite")
 	if err != nil {
-		zap.L().Error("Failed to open BadgerDB", zap.Error(err))
+		zap.L().Error("Failed to open SQLite", zap.Error(err))
 		return
 	}
-	defer badger.Close()
+	defer sqlite.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sigCh := make(chan os.Signal, 1)
@@ -54,7 +54,7 @@ func main() {
 		}
 	}()
 
-	if err := tdh.BlockUntilOnTipAndKeepListeningAsync(badger, ctx); err != nil {
+	if err := tdh.BlockUntilOnTipAndKeepListeningAsync(sqlite, ctx); err != nil {
 		zap.L().Error("Failed to listen on TDH contracts", zap.Error(err))
 		cancel()
 	}

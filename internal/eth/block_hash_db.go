@@ -1,10 +1,9 @@
 package eth
 
 import (
-	"encoding/binary"
+	"database/sql"
 	"sync"
 
-	"github.com/dgraph-io/badger/v3"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -14,100 +13,39 @@ type BlockHashDb interface {
 	RevertFromBlock(fromBlock uint64) error
 }
 
-func NewBlockHashDb(db *badger.DB) BlockHashDb {
+func NewBlockHashDb(db *sql.DB) BlockHashDb {
 	return &BlockHashDbImpl{db: db}
 }
 
 type BlockHashDbImpl struct {
 	mu sync.RWMutex
-	db *badger.DB
+	db *sql.DB
 }
-
-const blockHashPrefix = "indexer:blockHash:"
 
 func (b *BlockHashDbImpl) GetHash(blockNumber uint64) (common.Hash, bool) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	var blockHash common.Hash
-	err := b.db.View(func(txn *badger.Txn) error {
-		key := encodeKey(blockNumber)
-		item, err := txn.Get(key)
-		if err != nil {
-			return err
-		}
-		val, err := item.ValueCopy(nil)
-		if err != nil {
-			return err
-		}
-		copy(blockHash[:], val)
-		return nil
-	})
-	if err == badger.ErrKeyNotFound {
-		return common.Hash{}, false
-	}
+	result := b.db.QueryRow("select hash from block_hash where block_number = ?", blockNumber)
+	var hash string
+	err := result.Scan(&hash)
 	if err != nil {
 		return common.Hash{}, false
 	}
-	return blockHash, true
+	return common.HexToHash(hash), true
+
 }
 
 func (b *BlockHashDbImpl) SetHash(blockNumber uint64, hash common.Hash) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
-	return b.db.Update(func(txn *badger.Txn) error {
-		key := encodeKey(blockNumber)
-		val := hash[:]
-		return txn.Set(key, val)
-	})
+	_, err := b.db.Exec("insert into block_hash (block_number, hash) values (?, ?) on conflict(block_number) do update set hash = ?", blockNumber, hash.Hex(), hash.Hex())
+	return err
 }
 
 func (b *BlockHashDbImpl) RevertFromBlock(fromBlock uint64) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
-	return b.db.Update(func(txn *badger.Txn) error {
-		var keysToDelete [][]byte
-
-		opts := badger.DefaultIteratorOptions
-		opts.PrefetchValues = false
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		startKey := encodeKey(fromBlock)
-		for it.Seek(startKey); it.Valid(); it.Next() {
-			item := it.Item()
-			k := item.Key()
-
-			if len(k) < len(blockHashPrefix) || string(k[:len(blockHashPrefix)]) != blockHashPrefix {
-				break
-			}
-
-			blockNum := decodeKey(k)
-			if blockNum >= fromBlock {
-				keyCopy := append([]byte(nil), k...)
-				keysToDelete = append(keysToDelete, keyCopy)
-			}
-		}
-
-		for _, k := range keysToDelete {
-			if err := txn.Delete(k); err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-}
-
-func encodeKey(blockNum uint64) []byte {
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], blockNum)
-	return append([]byte(blockHashPrefix), buf[:]...)
-}
-
-func decodeKey(key []byte) uint64 {
-	numBytes := key[len(blockHashPrefix):]
-	return binary.BigEndian.Uint64(numBytes)
+	_, err := b.db.Exec("delete from block_hash where block_number >= ?", fromBlock)
+	return err
 }
