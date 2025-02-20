@@ -17,4 +17,3 @@ Application is developed in Golang. To build and run from the source code:
 7. To run only tests run `task test`.
 8. To build run `task build`. Output binary lands in `bin` folder.
 9. Before commiting run `task format` and `task lint`. Those make sure your changes are correctly formatted and it statisfies all the linting rules. If any of those tasks change anything or fail in the Gihub CI, then a CI pipeline will fail and your PR can't be merged.
-10. To view db entries run `task dump-db`. This will display the contents of the db in the console. You can also run `task dump-db -- -o file` to dump to a file `dump.txt` by default or `task dump-db -- -o file -f <filename>` to dump to specific file
