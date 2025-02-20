@@ -1,6 +1,10 @@
 .DS_Store
-config.env
 /bin/
 coverage.out
 coverage.html
 /db/
+dump.txt
+*.ignore
+# Ignore all .env files except config.example.env
+*.env
+!config.example.env

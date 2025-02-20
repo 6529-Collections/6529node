@@ -5,7 +5,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
+	"github.com/6529-Collections/6529node/pkg/tdh/models"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -49,7 +49,7 @@ func init() {
 }
 
 type EthTransactionLogsDecoder interface {
-	Decode(allLogs []types.Log) [][]tokens.TokenTransfer
+	Decode(allLogs []types.Log) [][]models.TokenTransfer
 }
 
 type DefaultEthTransactionLogsDecoder struct {
@@ -59,8 +59,8 @@ func NewDefaultEthTransactionLogsDecoder() *DefaultEthTransactionLogsDecoder {
 	return &DefaultEthTransactionLogsDecoder{}
 }
 
-func (d *DefaultEthTransactionLogsDecoder) Decode(allLogs []types.Log) [][]tokens.TokenTransfer {
-	blocks := map[uint64][]tokens.TokenTransfer{}
+func (d *DefaultEthTransactionLogsDecoder) Decode(allLogs []types.Log) [][]models.TokenTransfer {
+	blocks := map[uint64][]models.TokenTransfer{}
 	for _, lg := range allLogs {
 		if len(lg.Topics) == 0 {
 			continue
@@ -74,13 +74,13 @@ func (d *DefaultEthTransactionLogsDecoder) Decode(allLogs []types.Log) [][]token
 				from := common.HexToAddress(lg.Topics[1].Hex())
 				to := common.HexToAddress(lg.Topics[2].Hex())
 				tokenId := new(big.Int).SetBytes(lg.Topics[3].Bytes())
-				blocks[blockNum] = append(blocks[lg.BlockNumber], tokens.TokenTransfer{
+				blocks[blockNum] = append(blocks[lg.BlockNumber], models.TokenTransfer{
 					BlockNumber:      lg.BlockNumber,
-					TxHash:           lg.TxHash.Hex(),
-					Contract:         lg.Address.Hex(),
+					TxHash:           strings.ToLower(lg.TxHash.Hex()),
+					Contract:         strings.ToLower(lg.Address.Hex()),
 					EventName:        "Transfer",
-					From:             from.Hex(),
-					To:               to.Hex(),
+					From:             strings.ToLower(from.Hex()),
+					To:               strings.ToLower(to.Hex()),
 					TokenID:          tokenId.String(),
 					Amount:           1,
 					TransactionIndex: uint64(lg.TxIndex),
@@ -107,7 +107,7 @@ func (d *DefaultEthTransactionLogsDecoder) Decode(allLogs []types.Log) [][]token
 			}
 		}
 	}
-	var result [][]tokens.TokenTransfer
+	var result [][]models.TokenTransfer
 	for b := range blocks {
 		result = append(result, blocks[b])
 	}
@@ -115,7 +115,7 @@ func (d *DefaultEthTransactionLogsDecoder) Decode(allLogs []types.Log) [][]token
 	return result
 }
 
-func decodeTransferSingle(lg types.Log) ([]tokens.TokenTransfer, error) {
+func decodeTransferSingle(lg types.Log) ([]models.TokenTransfer, error) {
 	if len(lg.Topics) < 4 {
 		return nil, errors.New("invalid TransferSingle topics length")
 	}
@@ -130,22 +130,22 @@ func decodeTransferSingle(lg types.Log) ([]tokens.TokenTransfer, error) {
 		return nil, err
 	}
 
-	action := tokens.TokenTransfer{
+	action := models.TokenTransfer{
 		BlockNumber:      lg.BlockNumber,
-		TxHash:           lg.TxHash.Hex(),
-		Contract:         lg.Address.Hex(),
+		TxHash:           strings.ToLower(lg.TxHash.Hex()),
+		Contract:         strings.ToLower(lg.Address.Hex()),
 		EventName:        "TransferSingle",
-		From:             from.Hex(),
-		To:               to.Hex(),
+		From:             strings.ToLower(from.Hex()),
+		To:               strings.ToLower(to.Hex()),
 		TokenID:          transferData.ID.String(),
 		Amount:           transferData.Value.Int64(),
 		TransactionIndex: uint64(lg.TxIndex),
 		LogIndex:         uint64(lg.Index),
 	}
-	return []tokens.TokenTransfer{action}, nil
+	return []models.TokenTransfer{action}, nil
 }
 
-func decodeTransferBatch(lg types.Log) ([]tokens.TokenTransfer, error) {
+func decodeTransferBatch(lg types.Log) ([]models.TokenTransfer, error) {
 	if len(lg.Topics) < 4 {
 		return nil, errors.New("invalid TransferBatch topics length")
 	}
@@ -161,15 +161,15 @@ func decodeTransferBatch(lg types.Log) ([]tokens.TokenTransfer, error) {
 		return nil, err
 	}
 
-	var actions []tokens.TokenTransfer
+	var actions []models.TokenTransfer
 	for i := 0; i < len(batchData.Ids); i++ {
-		actions = append(actions, tokens.TokenTransfer{
+		actions = append(actions, models.TokenTransfer{
 			BlockNumber:      lg.BlockNumber,
-			TxHash:           lg.TxHash.Hex(),
-			Contract:         lg.Address.Hex(),
+			TxHash:           strings.ToLower(lg.TxHash.Hex()),
+			Contract:         strings.ToLower(lg.Address.Hex()),
 			EventName:        "TransferBatch",
-			From:             from.Hex(),
-			To:               to.Hex(),
+			From:             strings.ToLower(from.Hex()),
+			To:               strings.ToLower(to.Hex()),
 			TokenID:          batchData.Ids[i].String(),
 			Amount:           batchData.Values[i].Int64(),
 			TransactionIndex: uint64(lg.TxIndex),
