@@ -16,8 +16,6 @@ type TdhTransfersReceivedAction interface {
 	Handle(transfers models.TokenTransferBatch) error
 }
 
-var ErrResetRequired = errors.New("reset required due to out-of-order checkpoint")
-
 type DefaultTdhTransfersReceivedAction struct {
 	ctx             context.Context
 	db              *sql.DB
@@ -27,24 +25,12 @@ type DefaultTdhTransfersReceivedAction struct {
 	nftDb           ethdb.NFTDb
 }
 
-func NewTdhTransfersReceivedActionImpl(ctx context.Context, db *sql.DB, progressTracker ethdb.TdhIdxTrackerDb) *DefaultTdhTransfersReceivedAction {
-	transferDb := ethdb.NewTransferDb()
-	ownerDb := ethdb.NewOwnerDb()
-	nftDb := ethdb.NewNFTDb()
-
+func NewTdhTransfersReceivedActionImpl(ctx context.Context, db *sql.DB, transferDb ethdb.TransferDb, ownerDb ethdb.OwnerDb, nftDb ethdb.NFTDb, progressTracker ethdb.TdhIdxTrackerDb) *DefaultTdhTransfersReceivedAction {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		zap.L().Error("Failed to begin transaction", zap.Error(err))
 		return nil
 	}
-
-	defer func() {
-		if err != nil {
-			if rollbackErr := tx.Rollback(); rollbackErr != nil {
-				zap.L().Error("Failed to rollback transaction", zap.Error(rollbackErr))
-			}
-		}
-	}()
 
 	lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex, err := getLastSavedCheckpoint(tx)
 	if err != nil {
@@ -53,11 +39,6 @@ func NewTdhTransfersReceivedActionImpl(ctx context.Context, db *sql.DB, progress
 	}
 
 	zap.L().Debug("Last saved checkpoint", zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex)))
-
-	if err != nil {
-		zap.L().Error("Failed to get last saved checkpoint", zap.Error(err))
-		return nil
-	}
 
 	return &DefaultTdhTransfersReceivedAction{
 		ctx:             ctx,
@@ -75,7 +56,7 @@ func (a *DefaultTdhTransfersReceivedAction) applyTransfer(
 ) error {
 	// 1) Store the transfer
 	if err := a.transferDb.StoreTransfer(txn, transfer); err != nil {
-		zap.L().Error("Failed to store transfer", zap.Error(err))
+		zap.L().Error("Failed to store transfer", zap.Any("transfer", transfer), zap.Error(err))
 		return fmt.Errorf("failed to store transfer: %w", err)
 	}
 
@@ -160,21 +141,11 @@ func (a *DefaultTdhTransfersReceivedAction) reset(
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
-	// Use a named return variable to ensure rollback logic works correctly
-	var finalErr error
-	defer func() {
-		if finalErr != nil {
-			if rollbackErr := tx.Rollback(); rollbackErr != nil {
-				zap.L().Error("Failed to rollback transaction", zap.Error(rollbackErr))
-			}
-		}
-	}()
-
-	// 1) Gather all transfers at or after checkpoint in a *read* transaction.
+	// 1) Gather all transfers at or after checkpoint
 	transfers, err := a.transferDb.GetTransfersAfterCheckpoint(tx, blockNumber, txIndex, logIndex)
 	if err != nil {
-		finalErr = fmt.Errorf("failed to get transfers: %w", err)
-		return finalErr
+		_ = tx.Rollback()
+		return fmt.Errorf("failed to get transfers: %w", err)
 	}
 
 	// 2) Sort descending
@@ -191,23 +162,23 @@ func (a *DefaultTdhTransfersReceivedAction) reset(
 	// 3) Reverse each transfer
 	for _, tr := range transfers {
 		if e := a.applyTransferReverse(tx, tr); e != nil {
-			finalErr = e
-			return finalErr
+			_ = tx.Rollback()
+			return e
 		}
 	}
 
 	// 4) Delete from TransferDb
 	err = a.transferDb.DeleteTransfersAfterCheckpoint(tx, blockNumber, txIndex, logIndex)
 	if err != nil {
-		finalErr = fmt.Errorf("failed to delete transfers after checkpoint: %w", err)
-		return finalErr
+		_ = tx.Rollback()
+		return fmt.Errorf("failed to delete transfers after checkpoint: %w", err)
 	}
 
 	// 5) Finally update the checkpoint in the same transaction
 	latestTransfer, err := a.transferDb.GetLatestTransfer(tx)
 	if err != nil {
-		finalErr = fmt.Errorf("failed to get latest transfer: %w", err)
-		return finalErr
+		_ = tx.Rollback()
+		return fmt.Errorf("failed to get latest transfer: %w", err)
 	}
 
 	if latestTransfer == nil {
@@ -217,8 +188,8 @@ func (a *DefaultTdhTransfersReceivedAction) reset(
 	}
 
 	if err != nil {
-		finalErr = err
-		return finalErr
+		_ = tx.Rollback()
+		return fmt.Errorf("failed to update checkpoint: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -245,14 +216,6 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTr
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
-	defer func() {
-		if err != nil {
-			if rollbackErr := tx.Rollback(); rollbackErr != nil {
-				zap.L().Error("Failed to rollback transaction", zap.Error(rollbackErr))
-			}
-		}
-	}()
-
 	numBatches := (numTransfers + batchSize - 1) / batchSize // integer ceil
 
 	for batchIndex := 0; batchIndex < numBatches; batchIndex++ {
@@ -268,6 +231,7 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTr
 
 		lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex, err := getLastSavedCheckpoint(tx)
 		if err != nil {
+			_ = tx.Rollback()
 			return fmt.Errorf("failed to get last saved checkpoint: %w", err)
 		}
 
@@ -279,33 +243,30 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTr
 				zap.String("lastCheckpoint", fmt.Sprintf("%d:%d:%d", lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex)),
 				zap.String("firstTransfer", fmt.Sprintf("%d:%d:%d", firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex)),
 			)
-			return ErrResetRequired
+			zap.L().Warn("Resetting due to checkpoint mismatch")
+			err = a.reset(firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex)
+			if err != nil {
+				_ = tx.Rollback()
+				zap.L().Error("Failed to reset", zap.Error(err))
+				return err
+			}
 		}
 
 		for _, t := range chunk {
 			if err := a.applyTransfer(tx, t); err != nil {
+				_ = tx.Rollback()
 				zap.L().Error("Failed to process transfer", zap.String("tx", t.TxHash), zap.Uint64("logIndex", t.LogIndex), zap.Error(err))
 				return err
 			}
 		}
 
 		err = updateCheckpoint(tx, lastTransfer.BlockNumber, lastTransfer.TransactionIndex, lastTransfer.LogIndex)
-
-		zap.L().Info("Checkpoint saved", zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastTransfer.BlockNumber, lastTransfer.TransactionIndex, lastTransfer.LogIndex)))
-
 		if err != nil {
-			if errors.Is(err, ErrResetRequired) {
-				zap.L().Warn("Resetting due to checkpoint mismatch")
-				err = a.reset(firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex)
-				if err != nil {
-					zap.L().Error("Failed to reset", zap.Error(err))
-					return err
-				}
-				// retry the entire batch (or entire set) after reset
-				return a.Handle(transfersBatch)
-			}
+			_ = tx.Rollback()
 			return err
 		}
+
+		zap.L().Info("Checkpoint saved", zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastTransfer.BlockNumber, lastTransfer.TransactionIndex, lastTransfer.LogIndex)))
 
 		if len(transfersBatch.Transfers) > 0 {
 			zap.L().Debug("Batch processed",

@@ -39,10 +39,10 @@ func (t *TransferDbImpl) StoreTransfer(tx *sql.Tx, transfer models.TokenTransfer
 func (t *TransferDbImpl) GetTransfersAfterCheckpoint(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]models.TokenTransfer, error) {
 	rows, err := tx.Query(`
 		SELECT block_number, transaction_index, log_index, tx_hash, event_name, 
-			from_address, to_address, contract, token_id, amount, type
+			from_address, to_address, contract, token_id, amount, transfer_type
 		FROM token_transfers
 		WHERE block_number > ? OR (block_number = ? AND transaction_index > ?) 
-			OR (block_number = ? AND transaction_index = ? AND log_index > ?)`,
+			OR (block_number = ? AND transaction_index = ? AND log_index >= ?)`,
 		blockNumber, blockNumber, txIndex, blockNumber, txIndex, logIndex)
 
 	if err != nil {
@@ -58,7 +58,7 @@ func (t *TransferDbImpl) DeleteTransfersAfterCheckpoint(tx *sql.Tx, blockNumber,
 	_, err := tx.Exec(`
 		DELETE FROM token_transfers
 		WHERE block_number > ? OR (block_number = ? AND transaction_index > ?) 
-			OR (block_number = ? AND transaction_index = ? AND log_index > ?)`,
+			OR (block_number = ? AND transaction_index = ? AND log_index >= ?)`,
 		blockNumber, blockNumber, txIndex, blockNumber, txIndex, logIndex)
 	return err
 }
@@ -67,7 +67,7 @@ func (t *TransferDbImpl) DeleteTransfersAfterCheckpoint(tx *sql.Tx, blockNumber,
 func (t *TransferDbImpl) GetLatestTransfer(tx *sql.Tx) (*models.TokenTransfer, error) {
 	row := tx.QueryRow(`
 		SELECT block_number, transaction_index, log_index, tx_hash, event_name, 
-			from_address, to_address, contract, token_id, amount, type
+			from_address, to_address, contract, token_id, amount, transfer_type
 		FROM token_transfers ORDER BY block_number DESC, transaction_index DESC, log_index DESC LIMIT 1`)
 
 	var transfer models.TokenTransfer

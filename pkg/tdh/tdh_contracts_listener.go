@@ -78,10 +78,13 @@ func BlockUntilOnTipAndKeepListeningAsync(db *sql.DB, ctx context.Context) error
 	if err != nil {
 		return err
 	}
+	transferDb := ethdb.NewTransferDb()
+	ownerDb := ethdb.NewOwnerDb()
+	nftDb := ethdb.NewNFTDb()
 	progressTracker := ethdb.NewTdhIdxTrackerDb(db)
 	listener := &TdhContractsListener{
 		transfersWatcher:        transfersWatcher,
-		transfersReceivedAction: eth.NewTdhTransfersReceivedActionImpl(ctx, db, progressTracker),
+		transfersReceivedAction: eth.NewTdhTransfersReceivedActionImpl(ctx, db, transferDb, ownerDb, nftDb, progressTracker),
 		progressTracker:         progressTracker,
 	}
 	tipReachedChan := make(chan bool, 10)

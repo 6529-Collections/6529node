@@ -3,6 +3,7 @@ module github.com/6529-Collections/6529node
 go 1.23.4
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/dgraph-io/badger/v4 v4.5.1
 	github.com/ethereum/go-ethereum v1.14.12
 	github.com/golang-migrate/migrate/v4 v4.18.2

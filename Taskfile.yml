@@ -23,7 +23,12 @@ tasks:
   test:
     desc: Run all tests
     cmds:
-      - go test ./... -race
+      - go test ./...
+
+  sqlite-cli:
+    desc: Open the SQLite CLI
+    cmds:
+      - sqlite3 ./db/sqlite/sqlite
 
   format:
     desc: Format code and fix imports

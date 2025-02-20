@@ -6,11 +6,11 @@ CREATE TABLE token_transfers (
     event_name        TEXT NOT NULL,
     from_address      TEXT NOT NULL,
     to_address        TEXT NOT NULL,
-    contract  TEXT NOT NULL,
+    contract          TEXT NOT NULL,
     token_id          TEXT NOT NULL,
     amount            INTEGER NOT NULL,
     transfer_type     TEXT NOT NULL CHECK (transfer_type IN ('SALE', 'SEND', 'AIRDROP', 'MINT', 'BURN')),
-    PRIMARY KEY (block_number, transaction_index, log_index)
+    PRIMARY KEY       (tx_hash, log_index, from_address, to_address, contract, token_id)
 );
 
 -- Index for fast lookups on transaction hash
