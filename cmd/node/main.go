@@ -9,6 +9,7 @@ import (
 	"github.com/6529-Collections/6529node/internal/config"
 	"github.com/6529-Collections/6529node/internal/db"
 	network_creator "github.com/6529-Collections/6529node/internal/network/creator"
+	"github.com/6529-Collections/6529node/internal/rpc"
 	"github.com/6529-Collections/6529node/pkg/tdh"
 	"go.uber.org/zap"
 )
@@ -32,13 +33,18 @@ func main() {
 		return
 	}
 	defer sqlite.Close()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	closeRpcServer := rpc.StartRPCServer(config.Get().RPCPort, ctx)
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-sigCh
 		zap.L().Info("Received termination signal, initiating shutdown", zap.String("signal", sig.String()))
+		closeRpcServer()
 		cancel()
 	}()
 
