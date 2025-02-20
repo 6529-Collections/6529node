@@ -255,7 +255,6 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTr
 		for _, t := range chunk {
 			if err := a.applyTransfer(tx, t); err != nil {
 				_ = tx.Rollback()
-				zap.L().Error("Failed to process transfer", zap.String("tx", t.TxHash), zap.Uint64("logIndex", t.LogIndex), zap.Error(err))
 				return err
 			}
 		}
