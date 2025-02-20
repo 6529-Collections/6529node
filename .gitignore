@@ -5,8 +5,6 @@ coverage.html
 /db/
 dump.txt
 *.ignore
-internal/eth/db/sqlite/test/*
-
 # Ignore all .env files except config.example.env
 *.env
 !config.example.env
