@@ -498,7 +498,13 @@ func TestDefaultTdhTransfersReceivedAction_reset_GetTransfersFails(t *testing.T)
 
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
-	defer tx.Rollback()
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		} else {
+			_ = tx.Commit()
+		}
+	}()
 
 	xferDb := &mockTransferDb{}
 	xferDb.On("GetTransfersAfterCheckpoint",
@@ -533,7 +539,13 @@ func TestDefaultTdhTransfersReceivedAction_reset_ApplyReverseFails(t *testing.T)
 
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
-	defer tx.Rollback()
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		} else {
+			_ = tx.Commit()
+		}
+	}()
 
 	xferDb := &mockTransferDb{}
 	xfer1 := models.TokenTransfer{Type: models.MINT, Amount: 5}
@@ -625,7 +637,13 @@ func TestDefaultTdhTransfersReceivedAction_reset_GetLatestFails(t *testing.T) {
 
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
-	defer tx.Rollback()
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		} else {
+			_ = tx.Commit()
+		}
+	}()
 
 	xferDb := &mockTransferDb{}
 	xferDb.On("GetTransfersAfterCheckpoint",
@@ -669,7 +687,13 @@ func TestDefaultTdhTransfersReceivedAction_reset_UpdateCheckpointFails(t *testin
 
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
-	defer tx.Rollback()
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		} else {
+			_ = tx.Commit()
+		}
+	}()
 
 	xferDb := &mockTransferDb{}
 	xferDb.On("GetTransfersAfterCheckpoint",
@@ -717,7 +741,13 @@ func TestDefaultTdhTransfersReceivedAction_reset_Success(t *testing.T) {
 
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
-	defer tx.Rollback()
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		} else {
+			_ = tx.Commit()
+		}
+	}()
 
 	xferDb := &mockTransferDb{}
 	nftDb := &mockNFTDb{}
