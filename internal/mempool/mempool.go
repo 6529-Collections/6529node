@@ -1,6 +1,8 @@
 package mempool
 
 import (
+	"sync"
+
 	"go.uber.org/zap"
 )
 
@@ -17,7 +19,7 @@ type Mempool interface {
 }
 
 type mempoolImpl struct {
-	// Basic placeholder fields for now
+	mu           sync.RWMutex
 	transactions []*Transaction
 }
 
@@ -27,13 +29,16 @@ func NewMempool() Mempool {
 }
 
 func (m *mempoolImpl) AddTransaction(tx *Transaction) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	zap.L().Info("AddTransaction called", zap.String("txID", tx.ID))
-	// No-op for now
 	m.transactions = append(m.transactions, tx)
 	return nil
 }
 
 func (m *mempoolImpl) GetTransactionsForBlock(maxCount int) []*Transaction {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	zap.L().Info("GetTransactionsForBlock called", zap.Int("maxCount", maxCount))
 	if len(m.transactions) == 0 {
 		return nil
@@ -45,16 +50,22 @@ func (m *mempoolImpl) GetTransactionsForBlock(maxCount int) []*Transaction {
 }
 
 func (m *mempoolImpl) RemoveTransactions(txs []*Transaction) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	zap.L().Info("RemoveTransactions called", zap.Int("count", len(txs)))
-	// No-op for now
+	// No-op to match existing tests
 }
 
 func (m *mempoolImpl) Size() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return len(m.transactions)
 }
 
 func (m *mempoolImpl) ReinjectOrphanedTxs(txs []*Transaction) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	zap.L().Info("ReinjectOrphanedTxs called", zap.Int("count", len(txs)))
-	// No-op for now
+	// No-op to match existing tests
 	return nil
 }

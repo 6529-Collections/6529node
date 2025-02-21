@@ -1,6 +1,7 @@
 package mempool
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,7 +9,6 @@ import (
 
 func TestMempoolInterface(t *testing.T) {
 	mp := NewMempool()
-
 	assert.Equal(t, 0, mp.Size())
 
 	err := mp.AddTransaction(&Transaction{ID: "tx123"})
@@ -24,4 +24,22 @@ func TestMempoolInterface(t *testing.T) {
 
 	err = mp.ReinjectOrphanedTxs(blockTxs)
 	assert.NoError(t, err)
+}
+
+func TestMempoolConcurrency(t *testing.T) {
+	mp := NewMempool()
+
+	var wg sync.WaitGroup
+	concurrency := 20
+	wg.Add(concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		go func(id int) {
+			defer wg.Done()
+			_ = mp.AddTransaction(&Transaction{ID: "txConcurrency"})
+		}(i)
+	}
+	wg.Wait()
+
+	assert.Equal(t, concurrency, mp.Size())
 }
