@@ -678,7 +678,7 @@ func TestOwnerDb_UpdateOwnershipReverse_InsertDuplicateOldOwner(t *testing.T) {
 
 func TestOwnerDb_GetUniqueID_ErrorPropagation(t *testing.T) {
 	// If you want to test "GetUniqueID" returning an actual DB error (beyond no rows),
-	// we can drop the 'nft_owners' table mid-transaction or use a mock. 
+	// we can drop the 'nft_owners' table mid-transaction or use a mock.
 	// For demonstration, let's rename the table to break the query.
 
 	db, ownerDb, nftDb, cleanup := setupTestOwnerDb(t)
@@ -755,146 +755,146 @@ func TestOwnerDb_UpdateOwnership_ErrorOnInsert(t *testing.T) {
 }
 
 func TestOwnerDb_UpdateOwnership_MintInsertError(t *testing.T) {
-    db, ownerDb, nftDb, cleanup := setupTestOwnerDb(t)
-    defer cleanup()
+	db, ownerDb, nftDb, cleanup := setupTestOwnerDb(t)
+	defer cleanup()
 
-    contract := "0xMintInsertErr"
-    tokenID := "MintErrToken"
-    toAddr := "0xNewOwner"
-    tokenUniqueID := uint64(9999)
+	contract := "0xMintInsertErr"
+	tokenID := "MintErrToken"
+	toAddr := "0xNewOwner"
+	tokenUniqueID := uint64(9999)
 
-    // 1) Create the NFT in the 'nfts' table so the foreign key (if any) is happy
-    createNftInDB(t, db, nftDb, contract, tokenID)
+	// 1) Create the NFT in the 'nfts' table so the foreign key (if any) is happy
+	createNftInDB(t, db, nftDb, contract, tokenID)
 
-    // 2) Add a CHECK constraint that fails any insert:
-    //    e.g. "CHECK (false)" or "CHECK (0 = 1)"
-    _, constraintErr := db.Exec(`ALTER TABLE nft_owners ADD CONSTRAINT no_inserts CHECK (0 = 1)`)
-    require.NoError(t, constraintErr, "Added no_inserts constraint so all INSERT statements fail")
+	// 2) Add a CHECK constraint that fails any insert:
+	//    e.g. "CHECK (false)" or "CHECK (0 = 1)"
+	_, constraintErr := db.Exec(`ALTER TABLE nft_owners ADD CONSTRAINT no_inserts CHECK (0 = 1)`)
+	require.NoError(t, constraintErr, "Added no_inserts constraint so all INSERT statements fail")
 
-    // 3) Try a MINT transfer (which will only do INSERT, skipping select/delete)
-    tx, err := db.BeginTx(context.Background(), nil)
-    require.NoError(t, err)
+	// 3) Try a MINT transfer (which will only do INSERT, skipping select/delete)
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
 
-    transfer := models.TokenTransfer{
-        From:      "",
-        To:        toAddr,
-        Contract:  contract,
-        TokenID:   tokenID,
-        BlockTime: 123456,
-        Type:      models.MINT,  // triggers only the INSERT branch
-    }
-    err = ownerDb.UpdateOwnership(tx, transfer, tokenUniqueID)
-    assert.Error(t, err, "Expected an error when the INSERT is blocked by the failing constraint")
+	transfer := models.TokenTransfer{
+		From:      "",
+		To:        toAddr,
+		Contract:  contract,
+		TokenID:   tokenID,
+		BlockTime: 123456,
+		Type:      models.MINT, // triggers only the INSERT branch
+	}
+	err = ownerDb.UpdateOwnership(tx, transfer, tokenUniqueID)
+	assert.Error(t, err, "Expected an error when the INSERT is blocked by the failing constraint")
 
-    _ = tx.Rollback()
+	_ = tx.Rollback()
 
-    // 4) Clean up
-    _, dropErr := db.Exec(`ALTER TABLE nft_owners DROP CONSTRAINT no_inserts`)
-    require.NoError(t, dropErr)
+	// 4) Clean up
+	_, dropErr := db.Exec(`ALTER TABLE nft_owners DROP CONSTRAINT no_inserts`)
+	require.NoError(t, dropErr)
 }
 
 func TestOwnerDb_UpdateOwnership_TransferDeleteError(t *testing.T) {
-    db, ownerDb, nftDb, cleanup := setupTestOwnerDb(t)
-    defer cleanup()
+	db, ownerDb, nftDb, cleanup := setupTestOwnerDb(t)
+	defer cleanup()
 
-    contract := "0xDelError"
-    tokenID := "TokenDelErr"
-    fromAddr := "0xAlice"
-    toAddr := "0xBob"
-    tokenUniqueID := uint64(5000)
+	contract := "0xDelError"
+	tokenID := "TokenDelErr"
+	fromAddr := "0xAlice"
+	toAddr := "0xBob"
+	tokenUniqueID := uint64(5000)
 
-    // 1) Create the NFT and give ownership to `fromAddr` via a MINT
-    createNftInDB(t, db, nftDb, contract, tokenID)
+	// 1) Create the NFT and give ownership to `fromAddr` via a MINT
+	createNftInDB(t, db, nftDb, contract, tokenID)
 
-    txMint, err := db.BeginTx(context.Background(), nil)
-    require.NoError(t, err)
+	txMint, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
 
-    mint := models.TokenTransfer{
-        From:      "",
-        To:        fromAddr,
-        Contract:  contract,
-        TokenID:   tokenID,
-        BlockTime: 100,
-        Type:      models.MINT,
-    }
-    err = ownerDb.UpdateOwnership(txMint, mint, tokenUniqueID)
-    require.NoError(t, err)
-    require.NoError(t, txMint.Commit())
+	mint := models.TokenTransfer{
+		From:      "",
+		To:        fromAddr,
+		Contract:  contract,
+		TokenID:   tokenID,
+		BlockTime: 100,
+		Type:      models.MINT,
+	}
+	err = ownerDb.UpdateOwnership(txMint, mint, tokenUniqueID)
+	require.NoError(t, err)
+	require.NoError(t, txMint.Commit())
 
-    // 2) Create a trigger that *always* raises an error on DELETE
-    _, triggerErr := db.Exec(`
+	// 2) Create a trigger that *always* raises an error on DELETE
+	_, triggerErr := db.Exec(`
         CREATE TRIGGER forbid_delete_nft_owners
         BEFORE DELETE ON nft_owners
         BEGIN
             SELECT RAISE(FAIL, 'No deletes allowed');
         END;
     `)
-    require.NoError(t, triggerErr, "Failed to create SQLite trigger")
+	require.NoError(t, triggerErr, "Failed to create SQLite trigger")
 
-    // 3) Attempt a normal transfer (From->To) 
-    //    This calls SELECT -> DELETE -> INSERT in your UpdateOwnership code.
-    txTransfer, err := db.BeginTx(context.Background(), nil)
-    require.NoError(t, err)
+	// 3) Attempt a normal transfer (From->To)
+	//    This calls SELECT -> DELETE -> INSERT in your UpdateOwnership code.
+	txTransfer, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
 
-    forward := models.TokenTransfer{
-        From:      fromAddr, 
-        To:        toAddr,
-        Contract:  contract,
-        TokenID:   tokenID,
-        BlockTime: 200,
-        Type:      "transfer",
-    }
-    err = ownerDb.UpdateOwnership(txTransfer, forward, tokenUniqueID)
-    assert.Error(t, err, "Expected error because the DELETE should fail due to the trigger")
+	forward := models.TokenTransfer{
+		From:      fromAddr,
+		To:        toAddr,
+		Contract:  contract,
+		TokenID:   tokenID,
+		BlockTime: 200,
+		Type:      "transfer",
+	}
+	err = ownerDb.UpdateOwnership(txTransfer, forward, tokenUniqueID)
+	assert.Error(t, err, "Expected error because the DELETE should fail due to the trigger")
 
-    _ = txTransfer.Rollback()
+	_ = txTransfer.Rollback()
 
-    // 4) Drop the trigger so it doesn't affect other tests
-    _, dropErr := db.Exec(`DROP TRIGGER forbid_delete_nft_owners`)
-    require.NoError(t, dropErr)
+	// 4) Drop the trigger so it doesn't affect other tests
+	_, dropErr := db.Exec(`DROP TRIGGER forbid_delete_nft_owners`)
+	require.NoError(t, dropErr)
 }
 
 func TestOwnerDb_UpdateOwnership_TransferDeleteError_WithMock(t *testing.T) {
-    mockDB, mock, err := sqlmock.New()
-    require.NoError(t, err)
-    defer mockDB.Close()
+	mockDB, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer mockDB.Close()
 
-    // 1) Tell the mock: "We expect a transaction to begin now."
-    mock.ExpectBegin()
+	// 1) Tell the mock: "We expect a transaction to begin now."
+	mock.ExpectBegin()
 
-    // 2) Actually begin the transaction
-    tx, err := mockDB.Begin()
-    require.NoError(t, err)
+	// 2) Actually begin the transaction
+	tx, err := mockDB.Begin()
+	require.NoError(t, err)
 
-    // 3) We expect a SELECT to succeed (the code will do `tx.QueryRow("SELECT owner...")`)
-    mock.ExpectQuery("SELECT owner FROM nft_owners").
-        WithArgs("0xMockContract", "Token123", 42).
-        WillReturnRows(sqlmock.NewRows([]string{"owner"}).AddRow("0xAlice"))
+	// 3) We expect a SELECT to succeed (the code will do `tx.QueryRow("SELECT owner...")`)
+	mock.ExpectQuery("SELECT owner FROM nft_owners").
+		WithArgs("0xMockContract", "Token123", 42).
+		WillReturnRows(sqlmock.NewRows([]string{"owner"}).AddRow("0xAlice"))
 
-    // 4) We expect the DELETE to fail
-    mock.ExpectExec("DELETE FROM nft_owners").
-        WithArgs("0xAlice", "0xMockContract", "Token123", 42).
-        WillReturnError(fmt.Errorf("forced delete error"))
+	// 4) We expect the DELETE to fail
+	mock.ExpectExec("DELETE FROM nft_owners").
+		WithArgs("0xAlice", "0xMockContract", "Token123", 42).
+		WillReturnError(fmt.Errorf("forced delete error"))
 
-    // Optionally, if your code never commits because an error occurs,
-    // you might expect a rollback:
-    mock.ExpectRollback()
+	// Optionally, if your code never commits because an error occurs,
+	// you might expect a rollback:
+	mock.ExpectRollback()
 
-    // 5) Now call the real method
-    ownerDb := &OwnerDbImpl{}
-    transfer := models.TokenTransfer{
-        From:     "0xAlice",
-        To:       "0xBob",
-        Contract: "0xMockContract",
-        TokenID:  "Token123",
-        Type:     "transfer",
-    }
-    err = ownerDb.UpdateOwnership(tx, transfer, 42)
-    assert.Error(t, err, "Should fail due to forced delete error")
+	// 5) Now call the real method
+	ownerDb := &OwnerDbImpl{}
+	transfer := models.TokenTransfer{
+		From:     "0xAlice",
+		To:       "0xBob",
+		Contract: "0xMockContract",
+		TokenID:  "Token123",
+		Type:     "transfer",
+	}
+	err = ownerDb.UpdateOwnership(tx, transfer, 42)
+	assert.Error(t, err, "Should fail due to forced delete error")
 
-    // 6) The test code does a rollback or commit, matching the expectation
-    _ = tx.Rollback()
+	// 6) The test code does a rollback or commit, matching the expectation
+	_ = tx.Rollback()
 
-    // 7) Finally check all expectations
-    assert.NoError(t, mock.ExpectationsWereMet())
+	// 7) Finally check all expectations
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
