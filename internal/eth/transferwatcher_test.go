@@ -161,7 +161,7 @@ func testWatchTransfersSimplePolling(t *testing.T) {
 	t10 := models.TokenTransfer{BlockNumber: 10, LogIndex: 0}
 	t12 := models.TokenTransfer{BlockNumber: 12, LogIndex: 1}
 	mockDecoder.On("Decode", sampleLogs).
-		Return([][]models.TokenTransfer{{t10, t12}}).
+		Return([][]models.TokenTransfer{{t10, t12}}, nil).
 		Maybe()
 
 	mockSalesDetector.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
@@ -315,7 +315,7 @@ func testWatchTransfersSubscription(t *testing.T) {
 				out = append(out, btrs)
 			}
 			return out
-		}).
+		}, nil).
 		Maybe()
 
 	mockSalesDetector.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
@@ -533,7 +533,7 @@ func testPollingErrorAndRecovery(t *testing.T) {
 				{BlockNumber: 1, LogIndex: 0},
 				{BlockNumber: 2, LogIndex: 0},
 			},
-		}).Once()
+		}, nil).Once()
 
 	mockSales.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
 		Return(map[int]models.TransferType{
@@ -631,7 +631,7 @@ func testCancelContextMidway(t *testing.T) {
 		Return(nil).
 		Maybe()
 
-	mockDecoder.On("Decode", mock.Anything).Return(nil).Maybe()
+	mockDecoder.On("Decode", mock.Anything).Return([][]models.TokenTransfer{}, nil).Maybe()
 	mockSales.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
 		Return(map[int]models.TransferType{}, nil).
 		Maybe()
@@ -727,7 +727,7 @@ func testLargeBlockRange(t *testing.T) {
 	mockBlockDb.On("SetHash", mock.AnythingOfType("uint64"), mock.AnythingOfType("common.Hash")).
 		Return(nil).
 		Maybe()
-	mockDecoder.On("Decode", mock.Anything).Return(nil).Maybe()
+	mockDecoder.On("Decode", mock.Anything).Return([][]models.TokenTransfer{}, nil).Maybe()
 	mockSales.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
 		Return(map[int]models.TransferType{}, nil).
 		Maybe()
@@ -833,7 +833,7 @@ func testWatchTransfersSaleDetectionSuccess(t *testing.T) {
 		Type:        models.SEND,
 	}
 	mockDecoder.On("Decode", logs).
-		Return([][]models.TokenTransfer{{txa1, txa2, txb1}}).
+		Return([][]models.TokenTransfer{{txa1, txa2, txb1}}, nil).
 		Once()
 
 	mockBlockDb.On("GetHash", mock.MatchedBy(func(b uint64) bool { return b < 100 })).
@@ -942,7 +942,7 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 		Type:        models.SEND,
 	}
 	mockDecoder.On("Decode", logs).
-		Return([][]models.TokenTransfer{{transferErr}}).
+		Return([][]models.TokenTransfer{{transferErr}}, nil).
 		Once()
 
 	mockBlockDb.On("GetHash", mock.MatchedBy(func(b uint64) bool { return b < 200 })).
@@ -1003,7 +1003,7 @@ func testAdaptiveFetch(t *testing.T) {
 
 	mockClient := mocks.NewEthClient(t)
 	blockDb := NewInMemoryBlockHashDb()
-	decoder := NewDefaultEthTransactionLogsDecoder()
+	decoder := NewDefaultEthTransactionLogsDecoder(ctx, mockClient)
 	salesDetector := NewDefaultSalesDetector(mockClient)
 
 	watcher := &DefaultTokensTransfersWatcher{

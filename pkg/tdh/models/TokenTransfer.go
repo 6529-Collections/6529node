@@ -18,6 +18,7 @@ type TokenTransfer struct {
 	BlockNumber      uint64
 	TransactionIndex uint64
 	LogIndex         uint64
+	BlockTime        uint64
 	TxHash           string
 	EventName        string
 	From             string
@@ -31,11 +32,4 @@ type TokenTransfer struct {
 type TokenTransferBatch struct {
 	Transfers   []TokenTransfer
 	BlockNumber uint64
-}
-
-type TokenTransferCheckpoint struct {
-	ID               int64
-	BlockNumber      uint64
-	TransactionIndex uint64
-	LogIndex         uint64
 }

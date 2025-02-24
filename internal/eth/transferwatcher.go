@@ -55,7 +55,7 @@ func NewTokensTransfersWatcher(db *sql.DB, ctx context.Context) (*DefaultTokensT
 	return &DefaultTokensTransfersWatcher{
 		ctx:              ctx,
 		client:           ethClient,
-		decoder:          NewDefaultEthTransactionLogsDecoder(),
+		decoder:          NewDefaultEthTransactionLogsDecoder(ctx, ethClient),
 		blockTracker:     ethdb.NewBlockHashDb(db),
 		salesDetector:    NewDefaultSalesDetector(ethClient),
 		maxBlocksInBatch: maxBlocksInBatch,
@@ -275,7 +275,11 @@ func (w *DefaultTokensTransfersWatcher) processRangeAdaptive(
 		)
 	}
 
-	decodedByBlock := w.decoder.Decode(logs)
+	decodedByBlock, err := w.decoder.Decode(logs)
+	if err != nil {
+		zap.L().Error("Failed decoding logs (adaptive)", zap.Error(err))
+		return err
+	}
 
 	var allTransfers []models.TokenTransfer
 	for _, perBlockTransfers := range decodedByBlock {

@@ -1,13 +1,16 @@
 package eth
 
 import (
+	"context"
 	"math/big"
 	"strings"
 	"testing"
 
+	"github.com/6529-Collections/6529node/internal/eth/mocks"
 	"github.com/6529-Collections/6529node/pkg/tdh/models"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,10 +29,22 @@ func MakeTransferBatchData(t *testing.T, ids []*big.Int, values []*big.Int) []by
 }
 
 func TestDefaultEthTransactionLogsDecoder_Decode(t *testing.T) {
-	decoder := &DefaultEthTransactionLogsDecoder{}
+	mockEthClient := new(mocks.EthClient)
+	decoder := &DefaultEthTransactionLogsDecoder{
+		ctx:       context.Background(),
+		ethClient: mockEthClient,
+	}
+
+	header := &types.Header{
+		Number: big.NewInt(123),
+		Time:   100,
+	}
+	block := types.NewBlock(header, nil, nil, nil)
+	mockEthClient.On("BlockByNumber", mock.Anything, mock.Anything).Return(block, nil)
 
 	t.Run("no logs -> empty result", func(t *testing.T) {
-		res := decoder.Decode(nil)
+		res, err := decoder.Decode(nil)
+		require.NoError(t, err)
 		require.Empty(t, res, "Expect empty slice when no logs provided")
 	})
 
@@ -40,7 +55,8 @@ func TestDefaultEthTransactionLogsDecoder_Decode(t *testing.T) {
 				TxHash:      common.HexToHash("0xabc"),
 			},
 		}
-		res := decoder.Decode(logs)
+		res, err := decoder.Decode(logs)
+		require.NoError(t, err)
 		require.Empty(t, res, "Log with no topics should be skipped")
 	})
 
@@ -64,7 +80,8 @@ func TestDefaultEthTransactionLogsDecoder_Decode(t *testing.T) {
 				},
 			},
 		}
-		res := decoder.Decode(logs)
+		res, err := decoder.Decode(logs)
+		require.NoError(t, err)
 		require.Len(t, res, 1, "Should be one block group in the result")
 		require.Len(t, res[0], 1, "Should decode exactly one transfer event")
 
@@ -90,7 +107,8 @@ func TestDefaultEthTransactionLogsDecoder_Decode(t *testing.T) {
 				},
 			},
 		}
-		res := decoder.Decode(logs)
+		res, err := decoder.Decode(logs)
+		require.NoError(t, err)
 		require.Empty(t, res, "Insufficient topics means skip")
 	})
 
@@ -114,7 +132,8 @@ func TestDefaultEthTransactionLogsDecoder_Decode(t *testing.T) {
 				Data: MakeTransferSingleData(t, id, value),
 			},
 		}
-		res := decoder.Decode(logs)
+		res, err := decoder.Decode(logs)
+		require.NoError(t, err)
 		require.Len(t, res, 1, "One block group in the result")
 		require.Len(t, res[0], 1, "One decoded event")
 
@@ -139,7 +158,8 @@ func TestDefaultEthTransactionLogsDecoder_Decode(t *testing.T) {
 				Data: nil,
 			},
 		}
-		res := decoder.Decode(logs)
+		res, err := decoder.Decode(logs)
+		require.NoError(t, err)
 		require.Empty(t, res, "Should skip due to invalid TransferSingle topics length")
 	})
 
@@ -163,7 +183,8 @@ func TestDefaultEthTransactionLogsDecoder_Decode(t *testing.T) {
 				Data: invalidData,
 			},
 		}
-		res := decoder.Decode(logs)
+		res, err := decoder.Decode(logs)
+		require.NoError(t, err)
 		require.Empty(t, res, "Should skip logs that fail to decode properly")
 	})
 
@@ -187,7 +208,8 @@ func TestDefaultEthTransactionLogsDecoder_Decode(t *testing.T) {
 				Data: MakeTransferBatchData(t, ids, values),
 			},
 		}
-		res := decoder.Decode(logs)
+		res, err := decoder.Decode(logs)
+		require.NoError(t, err)
 		require.Len(t, res, 1, "One block group in the result")
 		require.Len(t, res[0], 3, "Three decoded events from TransferBatch")
 
@@ -214,7 +236,8 @@ func TestDefaultEthTransactionLogsDecoder_Decode(t *testing.T) {
 				Data: nil,
 			},
 		}
-		res := decoder.Decode(logs)
+		res, err := decoder.Decode(logs)
+		require.NoError(t, err)
 		require.Empty(t, res, "Should skip logs with invalid TransferBatch topics length")
 	})
 
@@ -238,7 +261,8 @@ func TestDefaultEthTransactionLogsDecoder_Decode(t *testing.T) {
 				Data: invalidData,
 			},
 		}
-		res := decoder.Decode(logs)
+		res, err := decoder.Decode(logs)
+		require.NoError(t, err)
 		require.Empty(t, res, "Should skip logs that fail to decode TransferBatch properly")
 	})
 
@@ -290,7 +314,8 @@ func TestDefaultEthTransactionLogsDecoder_Decode(t *testing.T) {
 			},
 		}
 
-		res := decoder.Decode(logs)
+		res, err := decoder.Decode(logs)
+		require.NoError(t, err)
 		require.Len(t, res, 2, "Expect two block groups (block 100 and block 101)")
 
 		var block100Transfers, block101Transfers []models.TokenTransfer
@@ -326,7 +351,8 @@ func TestDefaultEthTransactionLogsDecoder_Decode(t *testing.T) {
 				Topics:      []common.Hash{randomTopic},
 			},
 		}
-		res := decoder.Decode(logs)
+		res, err := decoder.Decode(logs)
+		require.NoError(t, err)
 		require.Empty(t, res, "Logs with unknown topic signature should be ignored")
 	})
 }

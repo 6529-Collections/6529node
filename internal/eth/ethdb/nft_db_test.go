@@ -1,7 +1,9 @@
 package ethdb
 
 import (
+	"context"
 	"database/sql"
+	"sync"
 	"testing"
 
 	"github.com/6529-Collections/6529node/internal/db/testdb"
@@ -9,359 +11,338 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setupNFTTestDB creates a fresh test DB, ensures the `nfts` table exists,
-// and returns (NFTDb, *sql.DB, cleanupFn).
-func setupNFTTestDB(t *testing.T) (NFTDb, *sql.DB, func()) {
+func setupTestNFTDb(t *testing.T) (*sql.DB, NFTDb, func()) {
 	db, cleanup := testdb.SetupTestDB(t)
 
-	// Create table for nfts, if it doesn't exist
-	createTableSQL := `
-	CREATE TABLE IF NOT EXISTS nfts (
-		contract TEXT NOT NULL,
-		token_id TEXT NOT NULL,
-		supply INTEGER NOT NULL,
-		burnt_supply INTEGER NOT NULL,
-		PRIMARY KEY (contract, token_id)
-	);
-	`
-	_, err := db.Exec(createTableSQL)
-	require.NoError(t, err, "failed to create nfts table")
-
-	// Return an instance of the NFTDb implementation.
-	nftDb := NewNFTDb()
-
-	return nftDb, db, func() {
-		// Drop table (optional) so each test run is clean
-		_, _ = db.Exec("DROP TABLE IF EXISTS nfts")
-		cleanup()
-	}
+	nftDB := NewNFTDb()
+	return db, nftDB, cleanup
 }
 
-func TestNFTDb_UpdateSupply(t *testing.T) {
-	nftDb, db, cleanup := setupNFTTestDB(t)
+func TestNFTDb_UpdateSupply_CreatesNewNft(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
 	defer cleanup()
 
-	t.Run("successfully insert new NFT and increase supply", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err, "Failed to begin transaction")
 
-		err = nftDb.UpdateSupply(tx, "contractA", "tokenA", 10)
-		assert.NoError(t, err)
+	supply, err := nftDB.UpdateSupply(tx, "0xContractA", "TokenA")
+	require.NoError(t, err, "UpdateSupply should not fail on creating a new NFT")
+	assert.Equal(t, uint64(1), supply, "Expected new NFT supply to be 1")
 
-		// Commit the transaction so we can read the results
-		require.NoError(t, tx.Commit())
+	err = tx.Commit()
+	require.NoError(t, err, "Failed to commit transaction")
 
-		// Check row in DB
-		txCheck, err := db.Begin()
-		require.NoError(t, err)
-
-		defer func() { _ = tx.Rollback() }()
-
-		nft, err := nftDb.GetNft(txCheck, "contractA", "tokenA")
-		require.NoError(t, err)
-		assert.Equal(t, int64(10), nft.Supply)
-		assert.Equal(t, int64(0), nft.BurntSupply)
-	})
-
-	t.Run("update existing NFT supply", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
-
-		// First insert
-		err = nftDb.UpdateSupply(tx, "contractB", "tokenB", 5)
-		require.NoError(t, err)
-
-		// Then update
-		err = nftDb.UpdateSupply(tx, "contractB", "tokenB", 3)
-		assert.NoError(t, err)
-
-		require.NoError(t, tx.Commit())
-
-		txCheck, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
-
-		nft, err := nftDb.GetNft(txCheck, "contractB", "tokenB")
-		require.NoError(t, err)
-		assert.Equal(t, int64(8), nft.Supply)
-	})
-
-	t.Run("error on negative delta", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
-
-		err = nftDb.UpdateSupply(tx, "contractC", "tokenC", -1)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "delta must be non-negative")
-	})
+	// Verify in DB
+	txCheck, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	nft, err := nftDB.GetNft(txCheck, "0xContractA", "TokenA")
+	require.NoError(t, err, "GetNft should find newly created NFT")
+	assert.Equal(t, uint64(1), nft.Supply, "Expected supply=1 after creation")
+	assert.Equal(t, uint64(0), nft.BurntSupply, "Expected burnt_supply=0 after creation")
+	_ = txCheck.Rollback() // just checking, no need to commit
 }
 
-func TestNFTDb_UpdateSupplyReverse(t *testing.T) {
-	nftDb, db, cleanup := setupNFTTestDB(t)
+func TestNFTDb_UpdateSupply_ExistingNft(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
 	defer cleanup()
 
-	t.Run("successfully decrease existing supply", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
+	// Create an NFT manually first
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = nftDB.UpdateSupply(tx, "0xContractB", "TokenB")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
 
-		// Insert first
-		err = nftDb.UpdateSupply(tx, "contractX", "tokenX", 10)
-		require.NoError(t, err)
+	// Now update the same NFT again
+	tx, err = db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
 
-		// Now reverse some
-		err = nftDb.UpdateSupplyReverse(tx, "contractX", "tokenX", 5)
-		assert.NoError(t, err)
+	supply, err := nftDB.UpdateSupply(tx, "0xContractB", "TokenB")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2), supply, "Expected supply to increment to 2")
 
-		require.NoError(t, tx.Commit())
+	err = tx.Commit()
+	require.NoError(t, err)
 
-		txCheck, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = txCheck.Rollback() }()
-
-		nft, err := nftDb.GetNft(txCheck, "contractX", "tokenX")
-		require.NoError(t, err)
-		assert.Equal(t, int64(5), nft.Supply)
-	})
-
-	t.Run("error if delta <= 0", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
-
-		err = nftDb.UpdateSupplyReverse(tx, "contractX", "tokenX", 0)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "delta must be positive for reverse update")
-	})
-
-	t.Run("error if NFT doesn't exist", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
-
-		err = nftDb.UpdateSupplyReverse(tx, "nonExistent", "noToken", 5)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "cannot revert supply on nonexistent NFT")
-	})
-
-	t.Run("error if resulting supply would go negative", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
-
-		// Insert with supply 5
-		err = nftDb.UpdateSupply(tx, "contractNeg", "tokenNeg", 5)
-		require.NoError(t, err)
-
-		// Attempt to revert 10
-		err = nftDb.UpdateSupplyReverse(tx, "contractNeg", "tokenNeg", 10)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "cannot revert 10 from supply 5 (would go negative)")
-	})
+	// Double check final state
+	txCheck, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	nft, err := nftDB.GetNft(txCheck, "0xContractB", "TokenB")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2), nft.Supply, "Expected supply=2 after second update")
+	assert.Equal(t, uint64(0), nft.BurntSupply)
+	_ = txCheck.Rollback()
 }
 
-func TestNFTDb_UpdateBurntSupply(t *testing.T) {
-	nftDb, db, cleanup := setupNFTTestDB(t)
+func TestNFTDb_UpdateBurntSupply_ExistingNft(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
 	defer cleanup()
 
-	t.Run("successfully increase burnt supply", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
+	// Create an NFT first
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = nftDB.UpdateSupply(tx, "0xContractC", "TokenC")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
 
-		// Insert initial NFT
-		err = nftDb.UpdateSupply(tx, "cBurn", "tBurn", 10)
-		require.NoError(t, err)
+	// Now burn 1
+	tx, err = db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
 
-		err = nftDb.UpdateBurntSupply(tx, "cBurn", "tBurn", 3)
-		assert.NoError(t, err)
+	err = nftDB.UpdateBurntSupply(tx, "0xContractC", "TokenC")
+	require.NoError(t, err)
 
-		require.NoError(t, tx.Commit())
+	err = tx.Commit()
+	require.NoError(t, err)
 
-		txCheck, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = txCheck.Rollback() }()
-
-		nft, err := nftDb.GetNft(txCheck, "cBurn", "tBurn")
-		require.NoError(t, err)
-		assert.Equal(t, int64(10), nft.Supply)
-		assert.Equal(t, int64(3), nft.BurntSupply)
-	})
-
-	t.Run("error if delta <= 0", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
-
-		err = nftDb.UpdateBurntSupply(tx, "cBurn", "tBurn", -1)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "delta must be positive for burning supply")
-	})
-
-	t.Run("error if NFT does not exist", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
-
-		err = nftDb.UpdateBurntSupply(tx, "noContract", "noToken", 2)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "cannot burn NFT that does not exist")
-	})
+	// Check final state
+	txCheck, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	nft, err := nftDB.GetNft(txCheck, "0xContractC", "TokenC")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), nft.Supply, "Supply should remain 1")
+	assert.Equal(t, uint64(1), nft.BurntSupply, "Burnt supply should be 1")
+	_ = txCheck.Rollback()
 }
 
-func TestNFTDb_UpdateBurntSupplyReverse(t *testing.T) {
-	nftDb, db, cleanup := setupNFTTestDB(t)
+func TestNFTDb_UpdateBurntSupply_NonexistentNft(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
 	defer cleanup()
 
-	t.Run("successfully decrease burnt supply", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
 
-		// Insert the NFT with burnt supply 4
-		err = nftDb.UpdateSupply(tx, "contractZ", "tokenZ", 10)
-		require.NoError(t, err)
-		err = nftDb.UpdateBurntSupply(tx, "contractZ", "tokenZ", 4)
-		require.NoError(t, err)
+	err = nftDB.UpdateBurntSupply(tx, "0xContractD", "TokenD")
+	assert.Error(t, err, "Expected error when burning nonexistent NFT")
 
-		// Reverse 2 from burnt supply
-		err = nftDb.UpdateBurntSupplyReverse(tx, "contractZ", "tokenZ", 2)
-		assert.NoError(t, err)
+	// Rolling back so we can test the final state (though it should not have changed anything)
+	_ = tx.Rollback()
 
-		require.NoError(t, tx.Commit())
-
-		txCheck, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = txCheck.Rollback() }()
-
-		nft, err := nftDb.GetNft(txCheck, "contractZ", "tokenZ")
-		require.NoError(t, err)
-		assert.Equal(t, int64(10), nft.Supply)
-		assert.Equal(t, int64(2), nft.BurntSupply)
-	})
-
-	t.Run("error if delta <= 0", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
-
-		err = nftDb.UpdateBurntSupplyReverse(tx, "contractZ", "tokenZ", 0)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "delta must be positive for reverse burnt supply update")
-	})
-
-	t.Run("error if NFT does not exist", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
-
-		err = nftDb.UpdateBurntSupplyReverse(tx, "doesNotExist", "tokenNA", 1)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "cannot revert burnt supply on nonexistent NFT")
-	})
-
-	t.Run("error if burnt supply would go negative", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
-
-		// Insert the NFT with burnt supply 2
-		err = nftDb.UpdateSupply(tx, "contractZZ", "tokenZZ", 10)
-		require.NoError(t, err)
-		err = nftDb.UpdateBurntSupply(tx, "contractZZ", "tokenZZ", 2)
-		require.NoError(t, err)
-
-		// Try to revert 5
-		err = nftDb.UpdateBurntSupplyReverse(tx, "contractZZ", "tokenZZ", 5)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "cannot revert 5 from burnt supply 2 (would go negative)")
-	})
+	// Double-check that there's no NFT in DB
+	txCheck, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = nftDB.GetNft(txCheck, "0xContractD", "TokenD")
+	assert.Error(t, err, "Expected not found error after a failed burn attempt")
+	_ = txCheck.Rollback()
 }
 
-func TestNFTDb_GetNft(t *testing.T) {
-	nftDb, db, cleanup := setupNFTTestDB(t)
+func TestNFTDb_UpdateSupplyReverse_BasicRevert(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
 	defer cleanup()
 
-	t.Run("successfully get existing NFT", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
+	// Create NFT with supply=2
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = nftDB.UpdateSupply(tx, "0xContractE", "TokenE")
+	require.NoError(t, err)
+	_, err = nftDB.UpdateSupply(tx, "0xContractE", "TokenE")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
 
-		err = nftDb.UpdateSupply(tx, "cRead", "tRead", 10)
-		require.NoError(t, err)
+	// Reverse supply by 1
+	tx, err = db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	newSupply, err := nftDB.UpdateSupplyReverse(tx, "0xContractE", "TokenE")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), newSupply, "Supply should decrement to 1")
+	require.NoError(t, tx.Commit())
 
-		require.NoError(t, tx.Commit())
-
-		txCheck, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = txCheck.Rollback() }()
-
-		nft, err := nftDb.GetNft(txCheck, "cRead", "tRead")
-		require.NoError(t, err)
-		assert.Equal(t, int64(10), nft.Supply)
-		assert.Equal(t, int64(0), nft.BurntSupply)
-	})
-
-	t.Run("error if NFT not found", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
-
-		nft, err := nftDb.GetNft(tx, "unknownContract", "unknownToken")
-		assert.Nil(t, nft)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "NFT not found")
-	})
+	// Final check
+	txCheck, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	nft, err := nftDB.GetNft(txCheck, "0xContractE", "TokenE")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), nft.Supply, "Expected supply=1 after revert")
+	_ = txCheck.Rollback()
 }
 
-func TestNFTDb_ErrorOnTransactionFailure(t *testing.T) {
-	// This test attempts to force an error from the DB by using a closed tx
-	nftDb, db, cleanup := setupNFTTestDB(t)
+func TestNFTDb_UpdateSupplyReverse_NonexistentNft(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
 	defer cleanup()
 
-	t.Run("closed transaction should fail queries", func(t *testing.T) {
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		require.NoError(t, tx.Rollback()) // immediately rollback
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
 
-		// All subsequent queries should fail with "sql: transaction has already been committed or rolled back"
-		err = nftDb.UpdateSupply(tx, "any", "any", 1)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "transaction has already been committed or rolled back")
-
-		_, err = nftDb.GetNft(tx, "any", "any")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "transaction has already been committed or rolled back")
-	})
+	_, err = nftDB.UpdateSupplyReverse(tx, "0xContractF", "TokenF")
+	assert.Error(t, err, "Expected error when reverting supply on nonexistent NFT")
+	_ = tx.Rollback()
 }
 
-func TestNFTDb_ManualQueryErrorInjection(t *testing.T) {
-	// In some cases, you may want to test the code path where Exec returns an error
-	// (e.g., invalid SQL, locked table, etc.). This is optional, but can help you push coverage
-	// over the top by hitting zap.L().Error logs, etc.
-	nftDb, db, cleanup := setupNFTTestDB(t)
+func TestNFTDb_UpdateSupplyReverse_SupplyWouldGoNegative(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
 	defer cleanup()
 
-	t.Run("force invalid SQL to test error logging", func(t *testing.T) {
-		// We'll do this by replacing the table name with something invalid
-		// in a sub-transaction. This is a bit hacky but ensures coverage for the error path.
-		tx, err := db.Begin()
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
+	// Create NFT with supply=0 (we won't increment it, so supply remains 0).
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
 
-		// Temporarily rename the table
-		_, renameErr := tx.Exec(`ALTER TABLE nfts RENAME TO nfts_tmp`)
-		if renameErr != nil {
-			// If SQLite doesn't allow rename in transaction, skip
-			t.Skipf("Skipping rename test: %v", renameErr)
+	_, err = nftDB.UpdateSupply(tx, "0xContractG", "TokenG")
+	require.NoError(t, err)
+
+	// Now set supply=1, then revert it to 0 so the final supply is 0
+	_, err = nftDB.UpdateSupplyReverse(tx, "0xContractG", "TokenG")
+	require.NoError(t, err)
+
+	// Attempt another revert on supply=0 -> error
+	_, err = nftDB.UpdateSupplyReverse(tx, "0xContractG", "TokenG")
+	assert.Error(t, err, "Should fail if supply is already 0 and we revert again")
+
+	_ = tx.Rollback()
+}
+
+func TestNFTDb_UpdateBurntSupplyReverse_BasicRevert(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
+	defer cleanup()
+
+	// Create an NFT with supply=1, burnt_supply=1
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = nftDB.UpdateSupply(tx, "0xContractH", "TokenH")
+	require.NoError(t, err)
+	err = nftDB.UpdateBurntSupply(tx, "0xContractH", "TokenH")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	// Revert the burn
+	tx, err = db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	err = nftDB.UpdateBurntSupplyReverse(tx, "0xContractH", "TokenH")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	// Final check: burnt_supply should be 0
+	txCheck, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	nft, err := nftDB.GetNft(txCheck, "0xContractH", "TokenH")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), nft.BurntSupply, "Burnt supply should revert back to 0")
+	_ = txCheck.Rollback()
+}
+
+func TestNFTDb_UpdateBurntSupplyReverse_NonexistentNft(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
+	defer cleanup()
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	err = nftDB.UpdateBurntSupplyReverse(tx, "0xContractI", "TokenI")
+	assert.Error(t, err, "Expected error when reverting burnt supply on nonexistent NFT")
+
+	_ = tx.Rollback()
+}
+
+func TestNFTDb_UpdateBurntSupplyReverse_WouldGoNegative(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
+	defer cleanup()
+
+	// Create an NFT but don't burn it => burnt_supply=0
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = nftDB.UpdateSupply(tx, "0xContractJ", "TokenJ")
+	require.NoError(t, err)
+
+	// Attempting to revert burnt supply while burnt_supply=0
+	err = nftDB.UpdateBurntSupplyReverse(tx, "0xContractJ", "TokenJ")
+	assert.Error(t, err, "Cannot revert burnt supply from 0")
+
+	_ = tx.Rollback()
+}
+
+func TestNFTDb_GetNft_Nonexistent(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
+	defer cleanup()
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	_, err = nftDB.GetNft(tx, "0xContractK", "TokenK")
+	assert.Error(t, err, "Expected error on retrieving nonexistent NFT")
+
+	_ = tx.Rollback()
+}
+
+func TestNFTDb_ClosedTxBehavior(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
+	defer cleanup()
+
+	// Begin and immediately commit
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	// Now use this closed tx for an NFT operation
+	_, err = nftDB.UpdateSupply(tx, "0xContractZ", "TokenZ")
+	assert.Error(t, err, "Expected an error if the transaction is already closed")
+}
+
+func TestNFTDb_ConcurrentAccess(t *testing.T) {
+	// This test shows concurrency usage. Because each method expects a *sql.Tx,
+	// we typically don't do concurrent writes in the same Tx. Instead we show
+	// concurrent usage with separate transactions.
+
+	db, nftDB, cleanup := setupTestNFTDb(t)
+	defer cleanup()
+
+	var wg sync.WaitGroup
+
+	// We'll run concurrent supply updates on the same contract/token
+	// to see if it behaves well in separate transactions.
+	contract := "0xContractConcurrent"
+	tokenID := "TokenConcurrency"
+
+	// First, ensure the NFT is created
+	txInit, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = nftDB.UpdateSupply(txInit, contract, tokenID)
+	require.NoError(t, err)
+	require.NoError(t, txInit.Commit())
+
+	worker := func(start, end int) {
+		defer wg.Done()
+		for i := start; i < end; i++ {
+			tx, err := db.BeginTx(context.Background(), nil)
+			require.NoError(t, err)
+			_, err = nftDB.UpdateSupply(tx, contract, tokenID)
+			assert.NoError(t, err)
+			err = tx.Commit()
+			assert.NoError(t, err)
 		}
-		defer func() {
-			// Attempt to rename back
-			_, _ = tx.Exec(`ALTER TABLE nfts_tmp RENAME TO nfts`)
-		}()
+	}
 
-		// Now the code that calls "INSERT INTO nfts ..." will fail because "nfts" no longer exists.
-		err = nftDb.UpdateSupply(tx, "broken", "broken", 10)
-		assert.Error(t, err)
-	})
+	wg.Add(2)
+	go worker(0, 50)
+	go worker(50, 100)
+	wg.Wait()
+
+	// Final check
+	txFinal, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	nft, err := nftDB.GetNft(txFinal, contract, tokenID)
+	require.NoError(t, err)
+	// The initial call set supply=1, plus 100 increments from concurrency
+	assert.Equal(t, uint64(1+100), nft.Supply, "Expected final supply to account for concurrency increments")
+	_ = txFinal.Rollback()
+}
+
+func TestNFTDb_ErrorPropagation(t *testing.T) {
+	// This test tries to force or check that an error inside a query is properly propagated.
+	// The primary ways to do that are either by injecting a broken SQL statement,
+	// or using a transaction on a closed DB, etc.
+
+	db, nftDB, cleanup := setupTestNFTDb(t)
+	cleanup()
+
+	// The DB is now closed by cleanup, so any operation should fail
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		// might already fail here, but let's just check we can't do anything with nftDB
+		assert.Error(t, err, "Expected an error when trying to create a transaction on a closed DB")
+	} else {
+		_, err := nftDB.UpdateSupply(tx, "0xContractErr", "TokenErr")
+		assert.Error(t, err, "Expected error when using a closed DB transaction")
+
+		err = tx.Commit()
+		assert.Error(t, err, "Expected commit failure on closed DB")
+	}
 }

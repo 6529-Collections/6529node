@@ -66,36 +66,38 @@ func (a *DefaultTdhTransfersReceivedAction) applyTransfer(
 	txn *sql.Tx,
 	transfer models.TokenTransfer,
 ) error {
-	// 1) Store the transfer
-	if err := a.transferDb.StoreTransfer(txn, transfer); err != nil {
-		zap.L().Error("Failed to store transfer", zap.Any("transfer", transfer), zap.Error(err))
-		return fmt.Errorf("failed to store transfer: %w", err)
-	}
+	for i := int64(0); i < transfer.Amount; i++ {
+		var tokenUniqueID uint64
 
-	// 2) Handle Minting / Burning
-	if transfer.Type == models.MINT || transfer.Type == models.AIRDROP {
-		if err := a.nftDb.UpdateSupply(txn, transfer.Contract, transfer.TokenID, transfer.Amount); err != nil {
-			zap.L().Error("Failed to update NFT supply", zap.Error(err))
-			return fmt.Errorf("failed to update NFT supply: %w", err)
+		// 1) Update NFT supplies
+		if transfer.Type == models.MINT || transfer.Type == models.AIRDROP {
+			newSupply, updateSupplyErr := a.nftDb.UpdateSupply(txn, transfer.Contract, transfer.TokenID)
+			if updateSupplyErr != nil {
+				return fmt.Errorf("failed to update NFT supply: %w", updateSupplyErr)
+			}
+			tokenUniqueID = newSupply
+		} else {
+			if transfer.Type == models.BURN {
+				if updateBurntSupplyErr := a.nftDb.UpdateBurntSupply(txn, transfer.Contract, transfer.TokenID); updateBurntSupplyErr != nil {
+					return fmt.Errorf("failed to update NFT burnt supply: %w", updateBurntSupplyErr)
+				}
+			}
+			uniqueID, getUniqueIDErr := a.ownerDb.GetUniqueID(txn, transfer.Contract, transfer.TokenID, transfer.From)
+			if getUniqueIDErr != nil {
+				return fmt.Errorf("failed to get NFT unique ID: %w", getUniqueIDErr)
+			}
+			tokenUniqueID = uniqueID
 		}
-	} else if transfer.Type == models.BURN {
-		if err := a.nftDb.UpdateBurntSupply(txn, transfer.Contract, transfer.TokenID, transfer.Amount); err != nil {
-			zap.L().Error("Failed to update NFT burnt supply", zap.Error(err))
-			return fmt.Errorf("failed to update NFT burnt supply: %w", err)
-		}
-	}
 
-	// 3) Perform ownership update
-	if err := a.ownerDb.UpdateOwnership(
-		txn,
-		transfer.From,
-		transfer.To,
-		transfer.Contract,
-		transfer.TokenID,
-		transfer.Amount,
-	); err != nil {
-		zap.L().Error("Failed to update ownership", zap.Error(err))
-		return fmt.Errorf("failed to update ownership: %w", err)
+		// 2) Store the transfer
+		if storeTrfErr := a.transferDb.StoreTransfer(txn, transfer, tokenUniqueID); storeTrfErr != nil {
+			return fmt.Errorf("failed to store transfer: %w", storeTrfErr)
+		}
+
+		// 3) Update ownership
+		if updateOwnershipErr := a.ownerDb.UpdateOwnership(txn, transfer, tokenUniqueID); updateOwnershipErr != nil {
+			return fmt.Errorf("failed to update ownership: %w", updateOwnershipErr)
+		}
 	}
 
 	return nil
@@ -103,35 +105,31 @@ func (a *DefaultTdhTransfersReceivedAction) applyTransfer(
 
 func (a *DefaultTdhTransfersReceivedAction) applyTransferReverse(
 	txn *sql.Tx,
-	transfer models.TokenTransfer,
+	transfer ethdb.NFTTransfer,
 ) error {
+	// 0) Get the NFT unique ID
+	tokenUniqueID, getUniqueIDErr := a.ownerDb.GetUniqueID(txn, transfer.Contract, transfer.TokenID, transfer.To)
+	if getUniqueIDErr != nil {
+		return fmt.Errorf("failed to get NFT unique ID: %w", getUniqueIDErr)
+	}
+
 	// 1) If it was a burn forward, revert burnt supply
 	if transfer.Type == models.BURN {
-		if err := a.nftDb.UpdateBurntSupplyReverse(txn, transfer.Contract, transfer.TokenID, transfer.Amount); err != nil {
-			zap.L().Error("Failed to revert burnt supply", zap.Error(err))
-			return fmt.Errorf("failed to revert burnt supply: %w", err)
+		if updateBurntSupplyErr := a.nftDb.UpdateBurntSupplyReverse(txn, transfer.Contract, transfer.TokenID); updateBurntSupplyErr != nil {
+			return fmt.Errorf("failed to revert burnt supply: %w", updateBurntSupplyErr)
 		}
 	}
 
 	// 2) If it was a mint forward, revert minted supply
 	if transfer.Type == models.MINT || transfer.Type == models.AIRDROP {
-		if err := a.nftDb.UpdateSupplyReverse(txn, transfer.Contract, transfer.TokenID, transfer.Amount); err != nil {
-			zap.L().Error("Failed to revert minted supply", zap.Error(err))
-			return fmt.Errorf("failed to revert minted supply: %w", err)
+		if _, updateSupplyErr := a.nftDb.UpdateSupplyReverse(txn, transfer.Contract, transfer.TokenID); updateSupplyErr != nil {
+			return fmt.Errorf("failed to revert minted supply: %w", updateSupplyErr)
 		}
 	}
 
 	// 3) Revert ownership
-	if err := a.ownerDb.UpdateOwnershipReverse(
-		txn,
-		transfer.From,
-		transfer.To,
-		transfer.Contract,
-		transfer.TokenID,
-		transfer.Amount,
-	); err != nil {
-		zap.L().Error("Failed to revert ownership", zap.Error(err))
-		return fmt.Errorf("failed to revert ownership: %w", err)
+	if updateOwnershipErr := a.ownerDb.UpdateOwnershipReverse(txn, transfer, tokenUniqueID); updateOwnershipErr != nil {
+		return fmt.Errorf("failed to revert ownership: %w", updateOwnershipErr)
 	}
 
 	return nil
@@ -246,7 +244,6 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTr
 			err = a.reset(tx, firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex)
 			if err != nil {
 				_ = tx.Rollback()
-				zap.L().Error("Failed to reset", zap.Error(err))
 				return err
 			}
 		}
@@ -291,7 +288,7 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTr
 }
 
 func getLastSavedCheckpoint(tx *sql.Tx) (uint64, uint64, uint64, error) {
-	checkpoint := &models.TokenTransferCheckpoint{}
+	checkpoint := &ethdb.TokenTransferCheckpoint{}
 	err := tx.QueryRow("SELECT block_number, transaction_index, log_index FROM token_transfers_checkpoint").Scan(&checkpoint.BlockNumber, &checkpoint.TransactionIndex, &checkpoint.LogIndex)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

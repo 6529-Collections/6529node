@@ -3,1251 +3,507 @@ package eth
 import (
 	"context"
 	"database/sql"
-	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
-	"github.com/6529-Collections/6529node/internal/eth/mocks"
-	"github.com/6529-Collections/6529node/pkg/tdh/models"
-	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/6529-Collections/6529node/internal/db/testdb"
+	"github.com/6529-Collections/6529node/internal/eth/ethdb"
+	"github.com/6529-Collections/6529node/pkg/tdh/models"
 )
 
-//---------------------------------
-// Mock definitions for TransferDb, OwnerDb, NFTDb
-//---------------------------------
-
-type mockTransferDb struct{ mock.Mock }
-
-func (m *mockTransferDb) StoreTransfer(tx *sql.Tx, transfer models.TokenTransfer) error {
-	args := m.Called(tx, transfer)
-	return args.Error(0)
-}
-func (m *mockTransferDb) GetTransfersAfterCheckpoint(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]models.TokenTransfer, error) {
-	args := m.Called(tx, blockNumber, txIndex, logIndex)
-	return args.Get(0).([]models.TokenTransfer), args.Error(1)
-}
-func (m *mockTransferDb) DeleteTransfersAfterCheckpoint(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error {
-	args := m.Called(tx, blockNumber, txIndex, logIndex)
-	return args.Error(0)
-}
-func (m *mockTransferDb) GetLatestTransfer(tx *sql.Tx) (*models.TokenTransfer, error) {
-	args := m.Called(tx)
-	return args.Get(0).(*models.TokenTransfer), args.Error(1)
+type testDefaultTdhTransfersReceivedActionDeps struct {
+	db              *sql.DB
+	progressTracker ethdb.TdhIdxTrackerDb
+	transferDb      ethdb.TransferDb
+	ownerDb         ethdb.OwnerDb
+	nftDb           ethdb.NFTDb
+	cleanup         func()
 }
 
-type mockOwnerDb struct{ mock.Mock }
+func setupTestDefaultTdhTransfersReceivedActionDeps(t *testing.T) *testDefaultTdhTransfersReceivedActionDeps {
+	db, cleanup := testdb.SetupTestDB(t)
 
-func (m *mockOwnerDb) UpdateOwnership(tx *sql.Tx, from, to, contract, tokenID string, amount int64) error {
-	args := m.Called(tx, from, to, contract, tokenID, amount)
-	return args.Error(0)
-}
-func (m *mockOwnerDb) UpdateOwnershipReverse(tx *sql.Tx, from, to, contract, tokenID string, amount int64) error {
-	args := m.Called(tx, from, to, contract, tokenID, amount)
-	return args.Error(0)
-}
-func (m *mockOwnerDb) GetBalance(tx *sql.Tx, owner, contract, tokenID string) (int64, error) {
-	args := m.Called(tx, owner, contract, tokenID)
-	return args.Get(0).(int64), args.Error(1)
-}
+	progressTracker := ethdb.NewTdhIdxTrackerDb(db)
+	transferDb := ethdb.NewTransferDb()
+	ownerDb := ethdb.NewOwnerDb()
+	nftDb := ethdb.NewNFTDb()
 
-type mockNFTDb struct{ mock.Mock }
-
-func (m *mockNFTDb) UpdateSupply(tx *sql.Tx, contract, tokenID string, delta int64) error {
-	args := m.Called(tx, contract, tokenID, delta)
-	return args.Error(0)
-}
-func (m *mockNFTDb) UpdateSupplyReverse(tx *sql.Tx, contract, tokenID string, delta int64) error {
-	args := m.Called(tx, contract, tokenID, delta)
-	return args.Error(0)
-}
-func (m *mockNFTDb) UpdateBurntSupply(tx *sql.Tx, contract, tokenID string, delta int64) error {
-	args := m.Called(tx, contract, tokenID, delta)
-	return args.Error(0)
-}
-func (m *mockNFTDb) UpdateBurntSupplyReverse(tx *sql.Tx, contract, tokenID string, delta int64) error {
-	args := m.Called(tx, contract, tokenID, delta)
-	return args.Error(0)
-}
-func (m *mockNFTDb) GetNft(tx *sql.Tx, contract, tokenID string) (*models.NFT, error) {
-	args := m.Called(tx, contract, tokenID)
-	return args.Get(0).(*models.NFT), args.Error(1)
+	return &testDefaultTdhTransfersReceivedActionDeps{
+		db:              db,
+		progressTracker: progressTracker,
+		transferDb:      transferDb,
+		ownerDb:         ownerDb,
+		nftDb:           nftDb,
+		cleanup:         cleanup,
+	}
 }
 
-//---------------------------------
-// Test for NewTdhTransfersReceivedActionImpl
-//---------------------------------
-
-func TestNewTdhTransfersReceivedActionImpl_BeginTxFails(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	// Expect begin to fail
-	mockDB.ExpectBegin().WillReturnError(errors.New("boom begin tx"))
-
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-	xferDb := &mockTransferDb{}
-	ownerDb := &mockOwnerDb{}
-	nftDb := &mockNFTDb{}
-
-	action := NewTdhTransfersReceivedActionImpl(
-		context.Background(),
-		db,
-		xferDb,
-		ownerDb,
-		nftDb,
-		tracker,
+func newDefaultTdhTransfersReceivedAction(t *testing.T, deps *testDefaultTdhTransfersReceivedActionDeps) *DefaultTdhTransfersReceivedAction {
+	ctx := context.Background()
+	orchestrator := NewTdhTransfersReceivedActionImpl(
+		ctx,
+		deps.db,
+		deps.transferDb,
+		deps.ownerDb,
+		deps.nftDb,
+		deps.progressTracker,
 	)
-	assert.Nil(t, action, "Expected nil if BeginTx fails")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
+	require.NotNil(t, orchestrator, "Should successfully create orchestrator instance")
+	return orchestrator
 }
 
-func TestNewTdhTransfersReceivedActionImpl_GetCheckpointFails(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+func TestDefaultTdhTransfersReceivedAction_NoTransfers(t *testing.T) {
+	deps := setupTestDefaultTdhTransfersReceivedActionDeps(t)
+	defer deps.cleanup()
 
-	mockDB.ExpectBegin()
-	mockDB.ExpectQuery("SELECT block_number").WillReturnError(errors.New("get checkpoint fail"))
+	o := newDefaultTdhTransfersReceivedAction(t, deps)
 
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-	xferDb := &mockTransferDb{}
-	ownerDb := &mockOwnerDb{}
-	nftDb := &mockNFTDb{}
-
-	action := NewTdhTransfersReceivedActionImpl(
-		context.Background(),
-		db,
-		xferDb,
-		ownerDb,
-		nftDb,
-		tracker,
-	)
-	assert.Nil(t, action, "Should be nil on checkpoint error")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-func TestNewTdhTransfersReceivedActionImpl_SuccessNoCheckpoint(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	mockDB.ExpectBegin()
-	rows := sqlmock.NewRows([]string{"block_number", "transaction_index", "log_index"}).
-		FromCSVString("")
-	mockDB.ExpectQuery("SELECT block_number").WillReturnRows(rows)
-
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-	xferDb := &mockTransferDb{}
-	ownerDb := &mockOwnerDb{}
-	nftDb := &mockNFTDb{}
-
-	action := NewTdhTransfersReceivedActionImpl(
-		context.Background(),
-		db,
-		xferDb,
-		ownerDb,
-		nftDb,
-		tracker,
-	)
-	require.NotNil(t, action, "Should succeed if no checkpoint row")
-
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-//---------------------------------
-// applyTransfer tests
-//---------------------------------
-
-func TestDefaultTdhTransfersReceivedAction_applyTransfer_StoreFails(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	xferDb := &mockTransferDb{}
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
+	// Provide an empty batch
+	batch := models.TokenTransferBatch{
+		Transfers:   []models.TokenTransfer{},
+		BlockNumber: 999,
 	}
+	err := o.Handle(batch)
+	require.NoError(t, err, "Handling an empty batch should not fail")
 
-	xfer := models.TokenTransfer{Type: models.MINT, Contract: "0xC", TokenID: "T1", Amount: 1}
-
-	// match the tx argument by a function that returns true (no reflection on it)
-	xferDb.On("StoreTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-		mock.Anything,
-	).Return(errors.New("store fail"))
-
-	err = action.applyTransfer(nil, xfer)
-	assert.ErrorContains(t, err, "failed to store transfer")
-
-	// We are NOT calling xferDb.AssertExpectations(t) because that triggers reflection
+	// Final progress should be updated to 999 (the blockNumber in the batch),
+	// but the orchestrator calls SetProgress only if there's at least 1 transfer.
+	// The code does "if len(transfersBatch.Transfers) == 0 => return nil" before
+	// calling progressTracker.SetProgress. So we expect no progress update.
+	progress, dbErr := deps.progressTracker.GetProgress()
+	require.NoError(t, dbErr)
+	assert.Equal(t, uint64(0), progress, "No transfers => no progress update")
 }
 
-func TestDefaultTdhTransfersReceivedAction_applyTransfer_MintSupplyFails(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	xferDb := &mockTransferDb{}
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	xfer := models.TokenTransfer{Type: models.MINT, Contract: "0xC", TokenID: "T2", Amount: 5}
-
-	xferDb.On("StoreTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-		mock.Anything,
-	).Return(nil)
-
-	nftDb.On("UpdateSupply",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(errors.New("supply fail"))
-
-	err = action.applyTransfer(nil, xfer)
-	assert.ErrorContains(t, err, "failed to update NFT supply")
-}
-
-func TestDefaultTdhTransfersReceivedAction_applyTransfer_BurnSupplyFails(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	xferDb := &mockTransferDb{}
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	xfer := models.TokenTransfer{Type: models.BURN, Contract: "0xC", TokenID: "BurnMe", Amount: 2}
-
-	xferDb.On("StoreTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-		mock.Anything,
-	).Return(nil)
-
-	nftDb.On("UpdateBurntSupply",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(errors.New("burn fail"))
-
-	err = action.applyTransfer(nil, xfer)
-	assert.ErrorContains(t, err, "failed to update NFT burnt supply")
-}
-
-func TestDefaultTdhTransfersReceivedAction_applyTransfer_OwnershipFails(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	xferDb := &mockTransferDb{}
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	xfer := models.TokenTransfer{Type: models.MINT, Contract: "0xC", TokenID: "Ow1", Amount: 10}
-
-	xferDb.On("StoreTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-		mock.Anything,
-	).Return(nil)
-
-	nftDb.On("UpdateSupply",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(nil)
-
-	ownerDb.On("UpdateOwnership",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.From, xfer.To, xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(errors.New("ownership fail"))
-
-	err = action.applyTransfer(nil, xfer)
-	assert.ErrorContains(t, err, "failed to update ownership")
-}
-
-func TestDefaultTdhTransfersReceivedAction_applyTransfer_Success(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	xferDb := &mockTransferDb{}
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	xfer := models.TokenTransfer{
-		Type:     models.MINT,
-		Contract: "0xC",
-		TokenID:  "SuccessT",
-		Amount:   3,
-		From:     "0x0000000000000000000000000000000000000000",
-		To:       "0xSomeUser",
-	}
-
-	xferDb.On("StoreTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-		mock.Anything,
-	).Return(nil)
-
-	nftDb.On("UpdateSupply",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(nil)
-
-	ownerDb.On("UpdateOwnership",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.From, xfer.To, xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(nil)
-
-	err = action.applyTransfer(nil, xfer)
-	assert.NoError(t, err)
-}
-
-//---------------------------------
-// applyTransferReverse tests
-//---------------------------------
-
-func TestDefaultTdhTransfersReceivedAction_applyTransferReverse_BurnReverseFails(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	xferDb := &mockTransferDb{}
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	xfer := models.TokenTransfer{Type: models.BURN, Contract: "0xC", TokenID: "burnR", Amount: 6}
-
-	nftDb.On("UpdateBurntSupplyReverse",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(errors.New("burn reverse fail"))
-
-	err = action.applyTransferReverse(nil, xfer)
-	assert.ErrorContains(t, err, "failed to revert burnt supply")
-}
-
-func TestDefaultTdhTransfersReceivedAction_applyTransferReverse_MintReverseFails(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	xferDb := &mockTransferDb{}
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	xfer := models.TokenTransfer{Type: models.MINT, Contract: "0xC", TokenID: "mintR", Amount: 2}
-
-	nftDb.On("UpdateSupplyReverse",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(errors.New("supply reverse fail"))
-
-	err = action.applyTransferReverse(nil, xfer)
-	assert.ErrorContains(t, err, "failed to revert minted supply")
-}
-
-func TestDefaultTdhTransfersReceivedAction_applyTransferReverse_OwnerReverseFails(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	xferDb := &mockTransferDb{}
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	xfer := models.TokenTransfer{Type: models.BURN, Contract: "0xC", TokenID: "owRev", Amount: 10}
-
-	nftDb.On("UpdateBurntSupplyReverse",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(nil)
-
-	ownerDb.On("UpdateOwnershipReverse",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.From, xfer.To, xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(errors.New("reverse ownership fail"))
-
-	err = action.applyTransferReverse(nil, xfer)
-	assert.ErrorContains(t, err, "failed to revert ownership")
-}
-
-func TestDefaultTdhTransfersReceivedAction_applyTransferReverse_Success(t *testing.T) {
-	db, _, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	xferDb := &mockTransferDb{}
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	xfer := models.TokenTransfer{Type: models.BURN, Contract: "0xC", TokenID: "RevOk", Amount: 5}
-
-	nftDb.On("UpdateBurntSupplyReverse",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(nil)
-
-	ownerDb.On("UpdateOwnershipReverse",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.From, xfer.To, xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(nil)
-
-	err = action.applyTransferReverse(nil, xfer)
-	assert.NoError(t, err)
-}
-
-//---------------------------------
-// reset tests
-//---------------------------------
-
-func TestDefaultTdhTransfersReceivedAction_reset_GetTransfersFails(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	mockDB.ExpectBegin()
-
-	tx, err := db.BeginTx(context.Background(), nil)
-	require.NoError(t, err)
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		} else {
-			_ = tx.Commit()
-		}
-	}()
-
-	xferDb := &mockTransferDb{}
-	xferDb.On("GetTransfersAfterCheckpoint",
-		mock.AnythingOfType("*sql.Tx"),
-		uint64(10), uint64(2), uint64(3),
-	).Return([]models.TokenTransfer{}, errors.New("get after fail"))
-
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	err = action.reset(tx, 10, 2, 3)
-	assert.ErrorContains(t, err, "failed to get transfers")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-func TestDefaultTdhTransfersReceivedAction_reset_ApplyReverseFails(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	mockDB.ExpectBegin()
-
-	tx, err := db.BeginTx(context.Background(), nil)
-	require.NoError(t, err)
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		} else {
-			_ = tx.Commit()
-		}
-	}()
-
-	xferDb := &mockTransferDb{}
-	xfer1 := models.TokenTransfer{Type: models.MINT, Amount: 5}
-
-	xferDb.On("GetTransfersAfterCheckpoint",
-		mock.AnythingOfType("*sql.Tx"),
-		uint64(1), uint64(2), uint64(3),
-	).Return([]models.TokenTransfer{xfer1}, nil)
-
-	nftDb := &mockNFTDb{}
-	// MINT => UpdateSupplyReverse => fail
-	nftDb.On("UpdateSupplyReverse",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer1.Contract, xfer1.TokenID, xfer1.Amount,
-	).Return(errors.New("reverse supply fail"))
-
-	mockDB.ExpectRollback()
-
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	err = action.reset(tx, 1, 2, 3)
-	assert.ErrorContains(t, err, "reverse supply fail")
-}
-
-func TestDefaultTdhTransfersReceivedAction_reset_DeleteTransfersFails(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	tx := &sql.Tx{}
-
-	xferDb := &mockTransferDb{}
-	xfer1 := models.TokenTransfer{BlockNumber: 10}
-
-	xferDb.On("GetTransfersAfterCheckpoint",
-		mock.AnythingOfType("*sql.Tx"),
-		uint64(5), uint64(6), uint64(7),
-	).Return([]models.TokenTransfer{xfer1}, nil)
-
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-
-	nftDb.On("UpdateSupplyReverse",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer1.Contract, xfer1.TokenID, xfer1.Amount,
-	).Return(nil)
-	ownerDb.On("UpdateOwnershipReverse",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer1.From, xfer1.To, xfer1.Contract, xfer1.TokenID, xfer1.Amount,
-	).Return(nil)
-
-	xferDb.On("DeleteTransfersAfterCheckpoint",
-		mock.AnythingOfType("*sql.Tx"),
-		uint64(5), uint64(6), uint64(7),
-	).Return(errors.New("delete fail"))
-
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	err = action.reset(tx, 5, 6, 7)
-	assert.ErrorContains(t, err, "failed to delete transfers")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-func TestDefaultTdhTransfersReceivedAction_reset_GetLatestFails(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	mockDB.ExpectBegin()
-
-	tx, err := db.BeginTx(context.Background(), nil)
-	require.NoError(t, err)
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		} else {
-			_ = tx.Commit()
-		}
-	}()
-
-	xferDb := &mockTransferDb{}
-	xferDb.On("GetTransfersAfterCheckpoint",
-		mock.AnythingOfType("*sql.Tx"),
-		uint64(10), uint64(0), uint64(1),
-	).Return([]models.TokenTransfer{}, nil)
-
-	xferDb.On("DeleteTransfersAfterCheckpoint",
-		mock.AnythingOfType("*sql.Tx"),
-		uint64(10), uint64(0), uint64(1),
-	).Return(nil)
-
-	xferDb.On("GetLatestTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-	).Return((*models.TokenTransfer)(nil), errors.New("get latest fail"))
-
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	err = action.reset(tx, 10, 0, 1)
-	assert.ErrorContains(t, err, "failed to get latest transfer")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-func TestDefaultTdhTransfersReceivedAction_reset_UpdateCheckpointFails(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	mockDB.ExpectBegin()
-
-	tx, err := db.BeginTx(context.Background(), nil)
-	require.NoError(t, err)
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		} else {
-			_ = tx.Commit()
-		}
-	}()
-
-	xferDb := &mockTransferDb{}
-	xferDb.On("GetTransfersAfterCheckpoint",
-		mock.AnythingOfType("*sql.Tx"),
-		uint64(4), uint64(5), uint64(6),
-	).Return([]models.TokenTransfer{}, nil)
-
-	xferDb.On("DeleteTransfersAfterCheckpoint",
-		mock.AnythingOfType("*sql.Tx"),
-		uint64(4), uint64(5), uint64(6),
-	).Return(nil)
-
-	xfer := &models.TokenTransfer{BlockNumber: 99}
-	xferDb.On("GetLatestTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-	).Return(xfer, nil)
-
-	mockDB.ExpectExec("INSERT INTO token_transfers_checkpoint").
-		WillReturnError(errors.New("update ckp fail"))
-
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	err = action.reset(tx, 4, 5, 6)
-	assert.ErrorContains(t, err, "failed to update checkpoint")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-func TestDefaultTdhTransfersReceivedAction_reset_Success(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	mockDB.ExpectBegin()
-
-	tx, err := db.BeginTx(context.Background(), nil)
-	require.NoError(t, err)
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		} else {
-			_ = tx.Commit()
-		}
-	}()
-
-	xferDb := &mockTransferDb{}
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	xfer1 := models.TokenTransfer{BlockNumber: 10, Type: models.MINT, Amount: 1}
-	xfer2 := models.TokenTransfer{BlockNumber: 12, Type: models.BURN, Amount: 2}
-
-	xferDb.On("GetTransfersAfterCheckpoint",
-		mock.AnythingOfType("*sql.Tx"),
-		uint64(9), uint64(0), uint64(0),
-	).Return([]models.TokenTransfer{xfer1, xfer2}, nil)
-
-	nftDb.On("UpdateSupplyReverse",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer1.Contract, xfer1.TokenID, xfer1.Amount,
-	).Return(nil)
-	ownerDb.On("UpdateOwnershipReverse",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer1.From, xfer1.To, xfer1.Contract, xfer1.TokenID, xfer1.Amount,
-	).Return(nil)
-
-	nftDb.On("UpdateBurntSupplyReverse",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer2.Contract, xfer2.TokenID, xfer2.Amount,
-	).Return(nil)
-	ownerDb.On("UpdateOwnershipReverse",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer2.From, xfer2.To, xfer2.Contract, xfer2.TokenID, xfer2.Amount,
-	).Return(nil)
-
-	xferDb.On("DeleteTransfersAfterCheckpoint",
-		mock.AnythingOfType("*sql.Tx"),
-		uint64(9), uint64(0), uint64(0),
-	).Return(nil)
-
-	xferDb.On("GetLatestTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-	).Return((*models.TokenTransfer)(nil), nil)
-
-	mockDB.ExpectExec("DELETE FROM token_transfers_checkpoint").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	err = action.reset(tx, 9, 0, 0)
-	require.NoError(t, err)
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-//---------------------------------
-// Handle tests
-//---------------------------------
-
-func TestDefaultTdhTransfersReceivedAction_Handle_NoTransfers(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-	xferDb := &mockTransferDb{}
-	ownerDb := &mockOwnerDb{}
-	nftDb := &mockNFTDb{}
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-	err = action.Handle(models.TokenTransferBatch{Transfers: nil})
-	require.NoError(t, err)
-
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-func TestDefaultTdhTransfersReceivedAction_Handle_BeginTxFails(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	mockDB.ExpectBegin().WillReturnError(errors.New("boom begin handle"))
-
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-	xferDb := &mockTransferDb{}
-	ownerDb := &mockOwnerDb{}
-	nftDb := &mockNFTDb{}
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	batch := models.TokenTransferBatch{BlockNumber: 10, Transfers: []models.TokenTransfer{{}}}
-	err = action.Handle(batch)
-	assert.ErrorContains(t, err, "failed to begin transaction")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-func TestDefaultTdhTransfersReceivedAction_Handle_GetCheckpointFails(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	mockDB.ExpectBegin()
-	mockDB.ExpectQuery("SELECT block_number").WillReturnError(errors.New("ckp fail"))
-	mockDB.ExpectRollback()
-
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-	xferDb := &mockTransferDb{}
-	ownerDb := &mockOwnerDb{}
-	nftDb := &mockNFTDb{}
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	batch := models.TokenTransferBatch{Transfers: []models.TokenTransfer{{}}}
-	err = action.Handle(batch)
-	assert.ErrorContains(t, err, "failed to get last saved checkpoint")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-func TestDefaultTdhTransfersReceivedAction_Handle_CheckpointMismatchResetFails(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	mockDB.ExpectBegin()
-	row := sqlmock.NewRows([]string{"block_number", "transaction_index", "log_index"}).
-		AddRow(10, 5, 2)
-	mockDB.ExpectQuery("SELECT block_number").WillReturnRows(row)
-
-	// // second Begin => fails
-	// mockDB.ExpectBegin().WillReturnError(errors.New("reset begin fail"))
-
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-	xferDb := &mockTransferDb{}
-	ownerDb := &mockOwnerDb{}
-	nftDb := &mockNFTDb{}
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
+func TestDefaultTdhTransfersReceivedAction_SingleTransfer_Mint(t *testing.T) {
+	deps := setupTestDefaultTdhTransfersReceivedActionDeps(t)
+	defer deps.cleanup()
+
+	o := newDefaultTdhTransfersReceivedAction(t, deps)
+
+	transfer := models.TokenTransfer{
+		From:             "", // typical for mint
+		To:               "0xMintReceiver",
+		Contract:         "0xMintContract",
+		TokenID:          "TokenA",
+		Amount:           1, // For MINT, we might have multiple minted in one go
+		BlockNumber:      100,
+		TransactionIndex: 0,
+		LogIndex:         0,
+		BlockTime:        123456,
+		Type:             models.MINT,
 	}
 
 	batch := models.TokenTransferBatch{
-		BlockNumber: 10,
+		Transfers:   []models.TokenTransfer{transfer},
+		BlockNumber: 100,
+	}
+
+	err := o.Handle(batch)
+	require.NoError(t, err)
+
+	// Check progress
+	progress, err := deps.progressTracker.GetProgress()
+	require.NoError(t, err)
+	assert.Equal(t, uint64(100), progress, "Progress should match batch.BlockNumber")
+
+	// Verify DB side effects
+	// 1) NFT supply => Should be 1
+	txCheck, err := deps.db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	nft, nftErr := deps.nftDb.GetNft(txCheck, "0xMintContract", "TokenA")
+	require.NoError(t, nftErr)
+	require.NotNil(t, nft, "NFT should be created for minted token")
+	assert.Equal(t, uint64(1), nft.Supply, "Supply should be 1 after a single mint")
+
+	// 2) Ownership => 0xMintReceiver
+	uniqueID, uidErr := deps.ownerDb.GetUniqueID(txCheck, "0xMintContract", "TokenA", "0xMintReceiver")
+	require.NoError(t, uidErr)
+	assert.Equal(t, uint64(1), uniqueID, "UniqueID should match the minted supply (1)")
+
+	// 3) Transfer record
+	xfers, afterErr := deps.transferDb.GetTransfersAfterCheckpoint(txCheck, 0, 0, 0)
+	require.NoError(t, afterErr)
+	require.Len(t, xfers, 1, "Expect exactly 1 transfer stored")
+	assert.Equal(t, "0xMintReceiver", xfers[0].To)
+
+	_ = txCheck.Rollback()
+}
+
+func TestDefaultTdhTransfersReceivedAction_SingleTransfer_Burn(t *testing.T) {
+	deps := setupTestDefaultTdhTransfersReceivedActionDeps(t)
+	defer deps.cleanup()
+
+	o := newDefaultTdhTransfersReceivedAction(t, deps)
+
+	// First, we need to own an NFT so we can burn it
+	// We'll do a quick mint or airdrop manually using the orchestrator or a direct DB approach.
+	mintXfer := models.TokenTransfer{
+		From:             "",
+		To:               "0xBurner",
+		Contract:         "0xBurnContract",
+		TokenID:          "TokenB",
+		Amount:           1,
+		BlockNumber:      50,
+		TransactionIndex: 0,
+		LogIndex:         0,
+		BlockTime:        1000,
+		Type:             models.MINT,
+	}
+	err := o.Handle(models.TokenTransferBatch{Transfers: []models.TokenTransfer{mintXfer}, BlockNumber: 50})
+	require.NoError(t, err)
+
+	// Now we do a BURN
+	burnXfer := models.TokenTransfer{
+		From:             "0xBurner",
+		To:               "", // often burning sends it to zero address
+		Contract:         "0xBurnContract",
+		TokenID:          "TokenB",
+		Amount:           1,
+		BlockNumber:      55,
+		TransactionIndex: 1,
+		LogIndex:         0,
+		BlockTime:        2000,
+		Type:             models.BURN,
+	}
+	err = o.Handle(models.TokenTransferBatch{Transfers: []models.TokenTransfer{burnXfer}, BlockNumber: 55})
+	require.NoError(t, err)
+
+	// check progress
+	progress, err := deps.progressTracker.GetProgress()
+	require.NoError(t, err)
+	assert.Equal(t, uint64(55), progress)
+
+	// check burnt supply
+	txCheck, err := deps.db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	nft, err := deps.nftDb.GetNft(txCheck, "0xBurnContract", "TokenB")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), nft.Supply, "Supply remains 1 (once minted, doesn't necessarily decrement on burn in your code logic)")
+	assert.Equal(t, uint64(1), nft.BurntSupply, "Burnt supply should be incremented by 1")
+
+	// check ownership => burner shouldn't have it anymore
+	_, getUidErr := deps.ownerDb.GetUniqueID(txCheck, "0xBurnContract", "TokenB", "0xBurner")
+	assert.Error(t, getUidErr, "The burner no longer owns it")
+
+	_ = txCheck.Rollback()
+}
+
+func TestDefaultTdhTransfersReceivedAction_ChunkedTransfers(t *testing.T) {
+	deps := setupTestDefaultTdhTransfersReceivedActionDeps(t)
+	defer deps.cleanup()
+
+	o := newDefaultTdhTransfersReceivedAction(t, deps)
+
+	// We exceed the batchSize=100 => 120 transfers => 2 sub-batches
+	var bigTransfers []models.TokenTransfer
+	for i := 0; i < 120; i++ {
+		bigTransfers = append(bigTransfers, models.TokenTransfer{
+			From:             "", // empty for MINT
+			To:               fmt.Sprintf("0xReceiver%d", i),
+			Contract:         "0xBatchContract",
+			TokenID:          "TokenXYZ",
+			Amount:           1,
+			BlockNumber:      200,
+			TransactionIndex: 0,
+			LogIndex:         uint64(i),
+			BlockTime:        99999,
+			Type:             models.MINT, // <-- CHANGED to MINT
+		})
+	}
+
+	batch := models.TokenTransferBatch{
+		Transfers:   bigTransfers,
+		BlockNumber: 200,
+	}
+	err := o.Handle(batch)
+	require.NoError(t, err)
+
+	// Final progress should be 200
+	progress, progErr := deps.progressTracker.GetProgress()
+	require.NoError(t, progErr)
+	assert.Equal(t, uint64(200), progress)
+
+	// Verify that 120 transfers were stored
+	txCheck, err := deps.db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	xfers, xferErr := deps.transferDb.GetTransfersAfterCheckpoint(txCheck, 0, 0, 0)
+	require.NoError(t, xferErr)
+	assert.Len(t, xfers, 120, "All 120 should be stored")
+
+	_ = txCheck.Rollback()
+}
+
+func TestDefaultTdhTransfersReceivedAction_ResetDueToCheckpointMismatch(t *testing.T) {
+	deps := setupTestDefaultTdhTransfersReceivedActionDeps(t)
+	defer deps.cleanup()
+
+	o := newDefaultTdhTransfersReceivedAction(t, deps)
+
+	// 1) Insert a transfer with blockNumber=100 => checkpoint=100
+	t1 := models.TokenTransfer{
+		From:             "",
+		To:               "0xFirstOwner",
+		Contract:         "0xResetTest",
+		TokenID:          "T1",
+		Amount:           1,
+		BlockNumber:      100,
+		TransactionIndex: 0,
+		LogIndex:         0,
+		BlockTime:        1111,
+		Type:             models.MINT,
+	}
+	err := o.Handle(models.TokenTransferBatch{Transfers: []models.TokenTransfer{t1}, BlockNumber: 100})
+	require.NoError(t, err)
+
+	// 2) Next transfer has blockNumber=99 => behind last checkpoint => triggers reset
+	t2 := models.TokenTransfer{
+		From:             "",
+		To:               "0xOwnerButInPast",
+		Contract:         "0xResetTest",
+		TokenID:          "T2",
+		Amount:           1,
+		BlockNumber:      99,
+		TransactionIndex: 0,
+		LogIndex:         0,
+		BlockTime:        2222,
+		Type:             models.MINT,
+	}
+	err = o.Handle(models.TokenTransferBatch{Transfers: []models.TokenTransfer{t2}, BlockNumber: 99})
+	require.NoError(t, err)
+
+	// The orchestrator should detect blockNumber 99 < last checkpoint 100 => reset everything after block=99
+	// That includes the old transfer at block=100. So we expect the DB to remove it and revert ownership.
+
+	// final progress => after a successful Handle, the code sets the progress = batch.BlockNumber => 99
+	progress, progErr := deps.progressTracker.GetProgress()
+	require.NoError(t, progErr)
+	assert.Equal(t, uint64(99), progress, "Progress should revert to 99 after reset logic")
+
+	// check DB => the original minted token at block=100 should have been undone
+	txCheck, err := deps.db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	// nft_transfers should contain only the new one (block=99) or none at all if it was inserted after the reset
+	xfers, xferErr := deps.transferDb.GetTransfersAfterCheckpoint(txCheck, 0, 0, 0)
+	require.NoError(t, xferErr)
+
+	// Because the code first does the reset *before* storing the new ones in the same transaction,
+	// we expect the old ones to be reversed/deleted, then the new transfer is applied. So let's confirm:
+	if assert.Len(t, xfers, 1, "Should only have the second minted transfer in DB") {
+		assert.Equal(t, uint64(99), xfers[0].BlockNumber)
+		assert.Equal(t, "0xOwnerButInPast", xfers[0].To)
+	}
+
+	// Confirm the first minted NFT is undone
+	_, uidErr := deps.ownerDb.GetUniqueID(txCheck, "0xResetTest", "T1", "0xFirstOwner")
+	assert.Error(t, uidErr, "Should be gone after reset")
+
+	// The second minted NFT should be present
+	uid2, uid2Err := deps.ownerDb.GetUniqueID(txCheck, "0xResetTest", "T2", "0xOwnerButInPast")
+	require.NoError(t, uid2Err)
+	assert.Equal(t, uint64(1), uid2)
+
+	_ = txCheck.Rollback()
+}
+
+func TestDefaultTdhTransfersReceivedAction_ErrorDuringApplyTransfer(t *testing.T) {
+	deps := setupTestDefaultTdhTransfersReceivedActionDeps(t)
+	defer deps.cleanup()
+
+	o := newDefaultTdhTransfersReceivedAction(t, deps)
+
+	// We’ll artificially force an error scenario. For instance, if you do a BURN
+	// but there's no prior ownership. "ownerDb.UpdateOwnership" might fail
+	// because current owner is not found. That should cause the entire transaction
+	// to roll back.
+
+	burnNoOwner := models.TokenTransfer{
+		From:             "0xNotActualOwner",
+		To:               "",
+		Contract:         "0xBadBurnContract",
+		TokenID:          "BadToken1",
+		Amount:           1,
+		BlockNumber:      123,
+		TransactionIndex: 0,
+		LogIndex:         0,
+		BlockTime:        3333,
+		Type:             models.BURN,
+	}
+
+	err := o.Handle(models.TokenTransferBatch{Transfers: []models.TokenTransfer{burnNoOwner}, BlockNumber: 123})
+	assert.Error(t, err, "We expect an error because there's no prior ownership to burn")
+
+	// Check that nothing was committed
+	txCheck, err := deps.db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	xfers, xferErr := deps.transferDb.GetTransfersAfterCheckpoint(txCheck, 0, 0, 0)
+	require.NoError(t, xferErr)
+	assert.Empty(t, xfers, "No transfer should be stored since we expect a rollback")
+
+	// Progress also should remain 0
+	p, pErr := deps.progressTracker.GetProgress()
+	require.NoError(t, pErr)
+	assert.Equal(t, uint64(0), p, "No progress update because everything rolled back")
+
+	_ = txCheck.Rollback()
+}
+
+func TestDefaultTdhTransfersReceivedAction_MultipleAmountsInOneTransfer(t *testing.T) {
+	// The code does `for i := int64(0); i < transfer.Amount; i++ { ... }`
+	// We test that each "unit" of NFT is minted, stored, and has unique supply/ownership.
+
+	deps := setupTestDefaultTdhTransfersReceivedActionDeps(t)
+	defer deps.cleanup()
+
+	o := newDefaultTdhTransfersReceivedAction(t, deps)
+
+	transfer := models.TokenTransfer{
+		From:             "",
+		To:               "0xMultiMintReceiver",
+		Contract:         "0xMultiMintContract",
+		TokenID:          "MultiToken",
+		Amount:           3,
+		BlockNumber:      300,
+		TransactionIndex: 2,
+		LogIndex:         5,
+		BlockTime:        99999,
+		Type:             models.MINT,
+	}
+
+	err := o.Handle(models.TokenTransferBatch{
+		Transfers:   []models.TokenTransfer{transfer},
+		BlockNumber: 300,
+	})
+	require.NoError(t, err)
+
+	// Check supply => should be 3
+	txCheck, err := deps.db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	nft, nftErr := deps.nftDb.GetNft(txCheck, "0xMultiMintContract", "MultiToken")
+	require.NoError(t, nftErr)
+	assert.Equal(t, uint64(3), nft.Supply, "Should have minted 3 total")
+
+	// The code calls `tokenUniqueID = newSupply` for each minted item. That means:
+	//  1st iteration => newSupply=1
+	//  2nd iteration => newSupply=2
+	//  3rd iteration => newSupply=3
+	// For ownership, each iteration calls `UpdateOwnership(..., tokenUniqueID)`.
+	// In practice, multiple identical owner rows can happen unless your code logic merges them.
+	// We expect 3 separate calls to StoreTransfer with unique tokenUniqueIDs=1,2,3
+	// but the same “to” address. This is an edge case for ERC1155-like multi-mint or a single-edition NFT.
+	// The tests confirm the code does not crash.
+
+	xfers, xferErr := deps.transferDb.GetTransfersAfterCheckpoint(txCheck, 0, 0, 0)
+	require.NoError(t, xferErr)
+	assert.Len(t, xfers, 3, "Should have 3 stored transfers (one per minted item)")
+
+	_ = txCheck.Rollback()
+}
+
+func TestDefaultTdhTransfersReceivedAction_ConcurrentHandleCalls_ExpectError(t *testing.T) {
+	// We still spin up everything the same way...
+	deps := setupTestDefaultTdhTransfersReceivedActionDeps(t)
+	defer deps.cleanup()
+
+	o := newDefaultTdhTransfersReceivedAction(t, deps)
+
+	var wg sync.WaitGroup
+
+	transfersA := models.TokenTransferBatch{
 		Transfers: []models.TokenTransfer{
-			{BlockNumber: 10, TransactionIndex: 5, LogIndex: 1},
+			{
+				From:        "",
+				To:          "0xConcurrentA",
+				Contract:    "0xCC",
+				TokenID:     "Tid",
+				Amount:      1,
+				BlockNumber: 400,
+				Type:        models.MINT,
+			},
 		},
+		BlockNumber: 400,
+	}
+	transfersB := models.TokenTransferBatch{
+		Transfers: []models.TokenTransfer{
+			{
+				From:        "",
+				To:          "0xConcurrentB",
+				Contract:    "0xCC",
+				TokenID:     "Tid",
+				Amount:      1,
+				BlockNumber: 401,
+				Type:        models.MINT,
+			},
+		},
+		BlockNumber: 401,
 	}
 
-	xferDb.On("GetTransfersAfterCheckpoint",
-		mock.AnythingOfType("*sql.Tx"),
-		uint64(10), uint64(5), uint64(1),
-	).Return([]models.TokenTransfer{}, errors.New("get transfers fail"))
+	// We'll track each goroutine's error in a slice.
+	errs := make([]error, 2)
 
-	err = action.Handle(batch)
-	assert.ErrorContains(t, err, "get transfers fail")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
+	worker := func(batch models.TokenTransferBatch, idx int) {
+		defer wg.Done()
+		errs[idx] = o.Handle(batch)
+	}
+
+	wg.Add(2)
+	go worker(transfersA, 0)
+	go worker(transfersB, 1)
+	wg.Wait()
+
+	// We now EXPECT that at least one call fails due to concurrency or checkpoint mismatch.
+	if errs[0] == nil && errs[1] == nil {
+		t.Error("Expected concurrency error, but both calls surprisingly succeeded")
+	} else {
+		t.Logf("Worker 0 error: %v\nWorker 1 error: %v", errs[0], errs[1])
+	}
 }
 
-func TestDefaultTdhTransfersReceivedAction_Handle_CheckpointMismatchResetSuccess(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+func TestDefaultTdhTransfersReceivedAction_ClosedDbAtConstruction(t *testing.T) {
+	// If we close the DB before constructing the orchestrator, we won't even get a valid orchestrator.
+	deps := setupTestDefaultTdhTransfersReceivedActionDeps(t)
+	deps.cleanup() // closes the DB
 
-	// first begin => success
-	mockDB.ExpectBegin()
-	row := sqlmock.NewRows([]string{"block_number", "transaction_index", "log_index"}).
-		AddRow(10, 5, 2)
-	mockDB.ExpectQuery("SELECT block_number").WillReturnRows(row)
-
-	xferDb := &mockTransferDb{}
-	xferDb.On("GetTransfersAfterCheckpoint",
-		mock.AnythingOfType("*sql.Tx"),
-		uint64(10), uint64(5), uint64(1),
-	).Return([]models.TokenTransfer{}, nil)
-	xferDb.On("DeleteTransfersAfterCheckpoint",
-		mock.AnythingOfType("*sql.Tx"),
-		uint64(10), uint64(5), uint64(1),
-	).Return(nil)
-	xferDb.On("GetLatestTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-	).Return((*models.TokenTransfer)(nil), nil)
-
-	mockDB.ExpectExec("DELETE FROM token_transfers_checkpoint").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	// now re-apply chunk
-	xfer := models.TokenTransfer{BlockNumber: 10, TransactionIndex: 5, LogIndex: 1, Type: models.MINT, Amount: 1}
-	xferDb.On("StoreTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-		mock.Anything,
-	).Return(nil)
-
-	nftDb := &mockNFTDb{}
-	nftDb.On("UpdateSupply",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(nil)
-
-	ownerDb := &mockOwnerDb{}
-	ownerDb.On("UpdateOwnership",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.From, xfer.To, xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(nil)
-
-	mockDB.ExpectExec("INSERT INTO token_transfers_checkpoint").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mockDB.ExpectCommit()
-
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-	tracker.On("SetProgress", uint64(10), mock.Anything).Return(nil)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-	batch := models.TokenTransferBatch{
-		BlockNumber: 10,
-		Transfers:   []models.TokenTransfer{xfer},
-	}
-
-	err = action.Handle(batch)
-	require.NoError(t, err)
-
-	assert.NoError(t, mockDB.ExpectationsWereMet())
+	ctx := context.Background()
+	o := NewTdhTransfersReceivedActionImpl(
+		ctx,
+		deps.db,
+		deps.transferDb,
+		deps.ownerDb,
+		deps.nftDb,
+		deps.progressTracker,
+	)
+	assert.Nil(t, o, "Should fail to create orchestrator because beginTx likely fails and logs an error")
 }
 
-func TestDefaultTdhTransfersReceivedAction_Handle_ApplyTransferFails(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+func TestDefaultTdhTransfersReceivedAction_ClosedDbDuringHandle(t *testing.T) {
+	// We'll create a valid orchestrator but close the DB *after* creation, then call Handle.
+	deps := setupTestDefaultTdhTransfersReceivedActionDeps(t)
+	o := newDefaultTdhTransfersReceivedAction(t, deps)
 
-	mockDB.ExpectBegin()
-	row := sqlmock.NewRows([]string{"block_number", "transaction_index", "log_index"})
-	mockDB.ExpectQuery("SELECT block_number").WillReturnRows(row)
-	mockDB.ExpectRollback()
+	deps.cleanup() // closes DB
 
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-	xferDb := &mockTransferDb{}
-	ownerDb := &mockOwnerDb{}
-	nftDb := &mockNFTDb{}
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
+	transfer := models.TokenTransfer{
+		From:             "",
+		To:               "0xReceiver",
+		Contract:         "0xClosedDBContract",
+		TokenID:          "ClosedDBToken",
+		Amount:           1,
+		BlockNumber:      500,
+		TransactionIndex: 0,
+		LogIndex:         0,
+		BlockTime:        9999,
+		Type:             models.MINT,
 	}
-
-	xfer := models.TokenTransfer{BlockNumber: 5, TxHash: "0xX", Type: models.BURN, Amount: 1}
-	xferDb.On("StoreTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-		mock.Anything,
-	).Return(errors.New("store err"))
-
-	batch := models.TokenTransferBatch{
-		BlockNumber: 5,
-		Transfers:   []models.TokenTransfer{xfer},
-	}
-	err = action.Handle(batch)
-	assert.ErrorContains(t, err, "failed to store transfer")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-func TestDefaultTdhTransfersReceivedAction_Handle_UpdateCheckpointFails(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	mockDB.ExpectBegin()
-	empty := sqlmock.NewRows([]string{"block_number", "transaction_index", "log_index"})
-	mockDB.ExpectQuery("SELECT block_number").WillReturnRows(empty)
-
-	xferDb := &mockTransferDb{}
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	xfer := models.TokenTransfer{BlockNumber: 5, Type: models.MINT, Amount: 2}
-	xferDb.On("StoreTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-		mock.Anything,
-	).Return(nil)
-
-	nftDb.On("UpdateSupply",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(nil)
-
-	ownerDb.On("UpdateOwnership",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.From, xfer.To, xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(nil)
-
-	mockDB.ExpectExec("INSERT INTO token_transfers_checkpoint").
-		WillReturnError(errors.New("checkpoint fail"))
-	mockDB.ExpectRollback()
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-	batch := models.TokenTransferBatch{BlockNumber: 5, Transfers: []models.TokenTransfer{xfer}}
-
-	err = action.Handle(batch)
-	assert.ErrorContains(t, err, "checkpoint fail")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-func TestDefaultTdhTransfersReceivedAction_Handle_CommitFails(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	mockDB.ExpectBegin()
-	row := sqlmock.NewRows([]string{"block_number", "transaction_index", "log_index"})
-	mockDB.ExpectQuery("SELECT block_number").WillReturnRows(row)
-
-	xferDb := &mockTransferDb{}
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	xfer := models.TokenTransfer{BlockNumber: 5, Type: models.BURN, Amount: 2}
-	xferDb.On("StoreTransfer", mock.AnythingOfType("*sql.Tx"), mock.Anything).
-		Return(nil)
-	nftDb.On("UpdateBurntSupply",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(nil)
-	ownerDb.On("UpdateOwnership",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.From, xfer.To, xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(nil)
-
-	mockDB.ExpectExec("INSERT INTO token_transfers_checkpoint").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mockDB.ExpectCommit().WillReturnError(errors.New("commit fail"))
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-	batch := models.TokenTransferBatch{BlockNumber: 5, Transfers: []models.TokenTransfer{xfer}}
-	err = action.Handle(batch)
-	assert.ErrorContains(t, err, "failed to commit transaction")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-func TestDefaultTdhTransfersReceivedAction_Handle_SetProgressFails(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	mockDB.ExpectBegin()
-	row := sqlmock.NewRows([]string{"block_number", "transaction_index", "log_index"})
-	mockDB.ExpectQuery("SELECT block_number").WillReturnRows(row)
-
-	mockDB.ExpectExec("INSERT INTO token_transfers_checkpoint").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mockDB.ExpectCommit()
-
-	xferDb := &mockTransferDb{}
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	xfer := models.TokenTransfer{BlockNumber: 7, Type: models.MINT, Amount: 3, TxHash: "0xAbc"}
-
-	xferDb.On("StoreTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-		mock.Anything,
-	).Return(nil)
-	nftDb.On("UpdateSupply",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(nil)
-	ownerDb.On("UpdateOwnership",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer.From, xfer.To, xfer.Contract, xfer.TokenID, xfer.Amount,
-	).Return(nil)
-
-	tracker.On("SetProgress", uint64(7), mock.Anything).Return(errors.New("progress fail"))
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-	batch := models.TokenTransferBatch{BlockNumber: 7, Transfers: []models.TokenTransfer{xfer}}
-
-	err = action.Handle(batch)
-	assert.ErrorContains(t, err, "progress fail")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-func TestDefaultTdhTransfersReceivedAction_Handle_Success(t *testing.T) {
-	db, mockDB, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
-
-	mockDB.ExpectBegin()
-	row := sqlmock.NewRows([]string{"block_number", "transaction_index", "log_index"})
-	mockDB.ExpectQuery("SELECT block_number").WillReturnRows(row)
-
-	xfer1 := models.TokenTransfer{BlockNumber: 10, TransactionIndex: 1, LogIndex: 0, Type: models.MINT, Amount: 1}
-	xfer2 := models.TokenTransfer{BlockNumber: 10, TransactionIndex: 1, LogIndex: 1, Type: models.BURN, Amount: 2}
-
-	xferDb := &mockTransferDb{}
-	nftDb := &mockNFTDb{}
-	ownerDb := &mockOwnerDb{}
-	tracker := mocks.NewTdhIdxTrackerDb(t)
-
-	xferDb.On("StoreTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer1,
-	).Return(nil)
-	nftDb.On("UpdateSupply",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer1.Contract, xfer1.TokenID, xfer1.Amount,
-	).Return(nil)
-	ownerDb.On("UpdateOwnership",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer1.From, xfer1.To, xfer1.Contract, xfer1.TokenID, xfer1.Amount,
-	).Return(nil)
-
-	xferDb.On("StoreTransfer",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer2, // or mock.Anything
-	).Return(nil)
-	nftDb.On("UpdateBurntSupply",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer2.Contract, xfer2.TokenID, xfer2.Amount,
-	).Return(nil)
-	ownerDb.On("UpdateOwnership",
-		mock.AnythingOfType("*sql.Tx"),
-		xfer2.From, xfer2.To, xfer2.Contract, xfer2.TokenID, xfer2.Amount,
-	).Return(nil)
-
-	mockDB.ExpectExec("INSERT INTO token_transfers_checkpoint").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mockDB.ExpectCommit()
-
-	tracker.On("SetProgress", uint64(10), mock.Anything).Return(nil)
-
-	action := &DefaultTdhTransfersReceivedAction{
-		ctx:             context.Background(),
-		db:              db,
-		progressTracker: tracker,
-		transferDb:      xferDb,
-		ownerDb:         ownerDb,
-		nftDb:           nftDb,
-	}
-
-	batch := models.TokenTransferBatch{BlockNumber: 10, Transfers: []models.TokenTransfer{xfer1, xfer2}}
-	err = action.Handle(batch)
-	require.NoError(t, err)
-	assert.NoError(t, mockDB.ExpectationsWereMet())
+	err := o.Handle(models.TokenTransferBatch{Transfers: []models.TokenTransfer{transfer}, BlockNumber: 500})
+	assert.Error(t, err, "Should fail because DB is closed mid-handle")
 }

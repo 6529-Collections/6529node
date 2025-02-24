@@ -1,6 +1,7 @@
 package eth
 
 import (
+	"context"
 	"errors"
 	"math/big"
 	"strings"
@@ -49,23 +50,37 @@ func init() {
 }
 
 type EthTransactionLogsDecoder interface {
-	Decode(allLogs []types.Log) [][]models.TokenTransfer
+	Decode(allLogs []types.Log) ([][]models.TokenTransfer, error)
 }
 
 type DefaultEthTransactionLogsDecoder struct {
+	ctx       context.Context
+	ethClient EthClient
 }
 
-func NewDefaultEthTransactionLogsDecoder() *DefaultEthTransactionLogsDecoder {
-	return &DefaultEthTransactionLogsDecoder{}
+func NewDefaultEthTransactionLogsDecoder(
+	ctx context.Context,
+	ethClient EthClient,
+) *DefaultEthTransactionLogsDecoder {
+	return &DefaultEthTransactionLogsDecoder{
+		ctx:       ctx,
+		ethClient: ethClient,
+	}
 }
 
-func (d *DefaultEthTransactionLogsDecoder) Decode(allLogs []types.Log) [][]models.TokenTransfer {
+func (d *DefaultEthTransactionLogsDecoder) Decode(allLogs []types.Log) ([][]models.TokenTransfer, error) {
 	blocks := map[uint64][]models.TokenTransfer{}
 	for _, lg := range allLogs {
 		if len(lg.Topics) == 0 {
 			continue
 		}
 		blockNum := lg.BlockNumber
+		block, err := d.ethClient.BlockByNumber(d.ctx, big.NewInt(int64(blockNum)))
+		if err != nil {
+			zap.L().Error("error getting block", zap.Error(err))
+			return nil, err
+		}
+		blockTime := block.Time()
 		erc1155transferSingleSig := erc1155ABI.Events["TransferSingle"].ID
 		erc1155transferBatchSig := erc1155ABI.Events["TransferBatch"].ID
 		sig := lg.Topics[0]
@@ -85,12 +100,13 @@ func (d *DefaultEthTransactionLogsDecoder) Decode(allLogs []types.Log) [][]model
 					Amount:           1,
 					TransactionIndex: uint64(lg.TxIndex),
 					LogIndex:         uint64(lg.Index),
+					BlockTime:        blockTime,
 				})
 			}
 		} else if sig == erc1155transferSingleSig || sig == erc1155transferBatchSig {
 			switch sig {
 			case erc1155transferSingleSig:
-				actions, err := decodeTransferSingle(lg)
+				actions, err := decodeTransferSingle(blockTime, lg)
 				if err != nil {
 					zap.L().Error("error decoding TransferSingle", zap.Error(err))
 					continue
@@ -98,7 +114,7 @@ func (d *DefaultEthTransactionLogsDecoder) Decode(allLogs []types.Log) [][]model
 				blocks[blockNum] = append(blocks[blockNum], actions...)
 
 			case erc1155transferBatchSig:
-				actions, err := decodeTransferBatch(lg)
+				actions, err := decodeTransferBatch(blockTime, lg)
 				if err != nil {
 					zap.L().Error("error decoding TransferBatch", zap.Error(err))
 					continue
@@ -112,10 +128,10 @@ func (d *DefaultEthTransactionLogsDecoder) Decode(allLogs []types.Log) [][]model
 		result = append(result, blocks[b])
 	}
 
-	return result
+	return result, nil
 }
 
-func decodeTransferSingle(lg types.Log) ([]models.TokenTransfer, error) {
+func decodeTransferSingle(blockTime uint64, lg types.Log) ([]models.TokenTransfer, error) {
 	if len(lg.Topics) < 4 {
 		return nil, errors.New("invalid TransferSingle topics length")
 	}
@@ -141,11 +157,12 @@ func decodeTransferSingle(lg types.Log) ([]models.TokenTransfer, error) {
 		Amount:           transferData.Value.Int64(),
 		TransactionIndex: uint64(lg.TxIndex),
 		LogIndex:         uint64(lg.Index),
+		BlockTime:        blockTime,
 	}
 	return []models.TokenTransfer{action}, nil
 }
 
-func decodeTransferBatch(lg types.Log) ([]models.TokenTransfer, error) {
+func decodeTransferBatch(blockTime uint64, lg types.Log) ([]models.TokenTransfer, error) {
 	if len(lg.Topics) < 4 {
 		return nil, errors.New("invalid TransferBatch topics length")
 	}
@@ -174,6 +191,7 @@ func decodeTransferBatch(lg types.Log) ([]models.TokenTransfer, error) {
 			Amount:           batchData.Values[i].Int64(),
 			TransactionIndex: uint64(lg.TxIndex),
 			LogIndex:         uint64(lg.Index),
+			BlockTime:        blockTime,
 		})
 	}
 	return actions, nil
