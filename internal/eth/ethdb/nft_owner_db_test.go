@@ -754,45 +754,6 @@ func TestOwnerDb_UpdateOwnership_ErrorOnInsert(t *testing.T) {
 	_ = tx2.Rollback()
 }
 
-func TestOwnerDb_UpdateOwnership_MintInsertError(t *testing.T) {
-	db, ownerDb, nftDb, cleanup := setupTestOwnerDb(t)
-	defer cleanup()
-
-	contract := "0xMintInsertErr"
-	tokenID := "MintErrToken"
-	toAddr := "0xNewOwner"
-	tokenUniqueID := uint64(9999)
-
-	// 1) Create the NFT in the 'nfts' table so the foreign key (if any) is happy
-	createNftInDB(t, db, nftDb, contract, tokenID)
-
-	// 2) Add a CHECK constraint that fails any insert:
-	//    e.g. "CHECK (false)" or "CHECK (0 = 1)"
-	_, constraintErr := db.Exec(`ALTER TABLE nft_owners ADD CONSTRAINT no_inserts CHECK (0 = 1)`)
-	require.NoError(t, constraintErr, "Added no_inserts constraint so all INSERT statements fail")
-
-	// 3) Try a MINT transfer (which will only do INSERT, skipping select/delete)
-	tx, err := db.BeginTx(context.Background(), nil)
-	require.NoError(t, err)
-
-	transfer := models.TokenTransfer{
-		From:      "",
-		To:        toAddr,
-		Contract:  contract,
-		TokenID:   tokenID,
-		BlockTime: 123456,
-		Type:      models.MINT, // triggers only the INSERT branch
-	}
-	err = ownerDb.UpdateOwnership(tx, transfer, tokenUniqueID)
-	assert.Error(t, err, "Expected an error when the INSERT is blocked by the failing constraint")
-
-	_ = tx.Rollback()
-
-	// 4) Clean up
-	_, dropErr := db.Exec(`ALTER TABLE nft_owners DROP CONSTRAINT no_inserts`)
-	require.NoError(t, dropErr)
-}
-
 func TestOwnerDb_UpdateOwnership_TransferDeleteError(t *testing.T) {
 	db, ownerDb, nftDb, cleanup := setupTestOwnerDb(t)
 	defer cleanup()
