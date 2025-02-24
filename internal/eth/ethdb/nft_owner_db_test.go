@@ -539,3 +539,223 @@ func TestOwnerDb_ErrorPropagation(t *testing.T) {
 	// Optionally we can do more forced errors if needed
 	_ = tx.Rollback()
 }
+
+func TestOwnerDb_Error_InsertDuplicateNftOwner(t *testing.T) {
+	// This test tries to force a duplicate key error on the INSERT portion of UpdateOwnership.
+	// We do that by calling UpdateOwnership twice with the same (owner, contract, token_id, token_unique_id).
+
+	db, ownerDb, nftDb, cleanup := setupTestOwnerDb(t)
+	defer cleanup()
+
+	contract := "0xDupContract"
+	tokenID := "TokenDup"
+	ownerAddr := "0xUser"
+
+	// Create the NFT
+	createNftInDB(t, db, nftDb, contract, tokenID)
+
+	// Insert once (mint)
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	mint := models.TokenTransfer{
+		From:      "",
+		To:        ownerAddr,
+		Contract:  contract,
+		TokenID:   tokenID,
+		BlockTime: 1234,
+		Type:      models.MINT,
+	}
+	tokenUniqueID := uint64(777)
+	err = ownerDb.UpdateOwnership(tx, mint, tokenUniqueID)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	// Insert again the same exact row in a new Tx
+	tx2, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	// Doing another MINT with the same (owner, contract, tokenID, tokenUniqueID) triggers a PK violation
+	err = ownerDb.UpdateOwnership(tx2, mint, tokenUniqueID)
+	assert.Error(t, err, "Expected duplicate PK error on second insert of identical row")
+
+	_ = tx2.Rollback()
+}
+
+func TestOwnerDb_Error_InsertWithoutNftFK(t *testing.T) {
+	// If you have a FOREIGN KEY (contract, token_id) => nfts(contract, token_id),
+	// this tries referencing an NFT that doesn't exist, expecting a foreign key error.
+	// If your schema doesn't have this constraint, skip or remove this test.
+
+	db, ownerDb, _, cleanup := setupTestOwnerDb(t)
+	defer cleanup()
+
+	contract := "0xNoSuchNFT"
+	tokenID := "MissingNFT"
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	mint := models.TokenTransfer{
+		From:      "",
+		To:        "0xFKFail",
+		Contract:  contract,
+		TokenID:   tokenID,
+		BlockTime: 98765,
+		Type:      models.MINT,
+	}
+	tokenUniqueID := uint64(9999)
+	err = ownerDb.UpdateOwnership(tx, mint, tokenUniqueID)
+	assert.Error(t, err, "Expected foreign key error because NFT doesn't exist in 'nfts' table")
+
+	_ = tx.Rollback()
+}
+
+func TestOwnerDb_UpdateOwnershipReverse_InsertDuplicateOldOwner(t *testing.T) {
+	// This test forces a duplicate key when reversing a transfer to an old owner
+	// if that owner already has the same (contract, token_id, token_unique_id).
+	// This scenario might be contrived, but let's see if your schema or logic might permit it.
+
+	db, ownerDb, nftDb, cleanup := setupTestOwnerDb(t)
+	defer cleanup()
+
+	contract := "0xRevDup"
+	tokenID := "RevDupToken"
+	tokenUniqueID := uint64(1010)
+	fromAddr := "0xOwner1"
+	toAddr := "0xOwner2"
+
+	// 1) Create NFT & ownership => fromAddr
+	createNftInDB(t, db, nftDb, contract, tokenID)
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	mint := models.TokenTransfer{
+		From:      "",
+		To:        fromAddr,
+		Contract:  contract,
+		TokenID:   tokenID,
+		BlockTime: 1000,
+		Type:      models.MINT,
+	}
+	err = ownerDb.UpdateOwnership(tx, mint, tokenUniqueID)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	// 2) Transfer => fromAddr => toAddr
+	tx, err = db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	forward := models.TokenTransfer{
+		From:      fromAddr,
+		To:        toAddr,
+		Contract:  contract,
+		TokenID:   tokenID,
+		BlockTime: 1001,
+		Type:      "transfer",
+	}
+	err = ownerDb.UpdateOwnership(tx, forward, tokenUniqueID)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	// 3) Now do a partial "reverse," but first we artificially insert the old
+	//    owner row again to force a duplicate PK.
+	tx, err = db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	// Insert the same (owner=fromAddr, token_unique_id=1010, contract+token=...) row
+	_, dupeErr := tx.Exec(`
+		INSERT INTO nft_owners (owner, contract, token_id, token_unique_id, timestamp)
+		VALUES (?, ?, ?, ?, ?)`,
+		fromAddr, contract, tokenID, tokenUniqueID, 99999,
+	)
+	require.NoError(t, dupeErr, "Insert old owner row manually => duplicates the PK")
+
+	// Now reversing should try to insert the same row again => duplication
+	reverse := NFTTransfer{
+		From:      fromAddr,
+		To:        toAddr,
+		Contract:  contract,
+		TokenID:   tokenID,
+		BlockTime: 1001,
+		Type:      "transfer",
+	}
+	err = ownerDb.UpdateOwnershipReverse(tx, reverse, tokenUniqueID)
+	assert.Error(t, err, "Expected duplicate key error inserting old owner row again")
+
+	_ = tx.Rollback()
+}
+
+func TestOwnerDb_GetUniqueID_ErrorPropagation(t *testing.T) {
+	// If you want to test "GetUniqueID" returning an actual DB error (beyond no rows),
+	// we can drop the 'nft_owners' table mid-transaction or use a mock. 
+	// For demonstration, let's rename the table to break the query.
+
+	db, ownerDb, nftDb, cleanup := setupTestOwnerDb(t)
+	defer cleanup()
+
+	// create NFT + ownership
+	createNftInDB(t, db, nftDb, "0xTest", "TokenX")
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	mint := models.TokenTransfer{From: "", To: "0xOwner", Contract: "0xTest", TokenID: "TokenX", BlockTime: 123, Type: models.MINT}
+	err = ownerDb.UpdateOwnership(tx, mint, 1)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	// rename table => break queries
+	_, renameErr := db.Exec(`ALTER TABLE nft_owners RENAME TO nft_owners_broken;`)
+	require.NoError(t, renameErr, "Renaming table should succeed")
+
+	tx2, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, getErr := ownerDb.GetUniqueID(tx2, "0xTest", "TokenX", "0xOwner")
+	assert.Error(t, getErr, "Expected error because 'nft_owners' table no longer exists")
+	_ = tx2.Rollback()
+}
+
+func TestOwnerDb_UpdateOwnership_ErrorOnInsert(t *testing.T) {
+	// Force an error specifically on the "insert new ownership" step of UpdateOwnership
+	// e.g., by renaming or dropping nft_owners between checking currentOwner and the insert.
+
+	db, ownerDb, nftDb, cleanup := setupTestOwnerDb(t)
+	defer cleanup()
+
+	// set up minted ownership for an NFT
+	createNftInDB(t, db, nftDb, "0xInsertErr", "TIE")
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	mint := models.TokenTransfer{
+		From:      "",
+		To:        "0xAlice",
+		Contract:  "0xInsertErr",
+		TokenID:   "TIE",
+		BlockTime: 100,
+		Type:      models.MINT,
+	}
+	err = ownerDb.UpdateOwnership(tx, mint, 55)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	// Now let's do a normal "transfer" => it calls "select owner" => success,
+	// then tries to "DELETE" old row => success, but "INSERT" new row => we break it in mid-step
+	tx2, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	transfer := models.TokenTransfer{
+		From:      "0xAlice",
+		To:        "0xBob",
+		Contract:  "0xInsertErr",
+		TokenID:   "TIE",
+		BlockTime: 200,
+		Type:      "transfer",
+	}
+
+	// Check current ownership => should pass
+	// Then let's rename the table before the insert:
+	_, renameErr := tx2.Exec(`ALTER TABLE nft_owners RENAME TO nft_owners_gone;`)
+	require.NoError(t, renameErr)
+
+	// Now calling UpdateOwnership -> The final insert fails
+	err = ownerDb.UpdateOwnership(tx2, transfer, 55)
+	assert.Error(t, err, "Expected an error on the final insert step")
+
+	_ = tx2.Rollback()
+}
+
