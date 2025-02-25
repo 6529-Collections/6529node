@@ -859,3 +859,137 @@ func TestOwnerDb_UpdateOwnership_TransferDeleteError_WithMock(t *testing.T) {
 	// 7) Finally check all expectations
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestOwnerDb_UpdateOwnership_TransferDeleteError_Trigger(t *testing.T) {
+	db, ownerDb, nftDb, cleanup := setupTestOwnerDb(t)
+	defer cleanup()
+
+	contract := "0xDelErrorRealDB"
+	tokenID := "RealDBTokenDelErr"
+	fromAddr := "0xAliceReal"
+	toAddr := "0xBobReal"
+	tokenUniqueID := uint64(5001)
+
+	// 1) Create the NFT and give ownership to `fromAddr` via a MINT
+	createNftInDB(t, db, nftDb, contract, tokenID)
+
+	txMint, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	mint := models.TokenTransfer{
+		From:      "",
+		To:        fromAddr,
+		Contract:  contract,
+		TokenID:   tokenID,
+		BlockTime: 100,
+		Type:      models.MINT,
+	}
+	err = ownerDb.UpdateOwnership(txMint, mint, tokenUniqueID)
+	require.NoError(t, err)
+	require.NoError(t, txMint.Commit())
+
+	// 2) Create a trigger that *always* raises an error on DELETE
+	_, triggerErr := db.Exec(`
+        CREATE TRIGGER forbid_delete_nft_owners_realdb
+        BEFORE DELETE ON nft_owners
+        BEGIN
+            SELECT RAISE(FAIL, 'No deletes allowed in real test');
+        END;
+    `)
+	require.NoError(t, triggerErr, "Failed to create SQLite trigger in real DB")
+
+	// 3) Attempt a normal transfer (From->To)
+	txTransfer, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	forward := models.TokenTransfer{
+		From:      fromAddr,
+		To:        toAddr,
+		Contract:  contract,
+		TokenID:   tokenID,
+		BlockTime: 200,
+		Type:      "transfer",
+	}
+	err = ownerDb.UpdateOwnership(txTransfer, forward, tokenUniqueID)
+	assert.Error(t, err, "Expected error because the DELETE should fail due to the trigger")
+
+	_ = txTransfer.Rollback()
+
+	// 4) Drop the trigger so it doesn't affect other tests
+	_, dropErr := db.Exec(`DROP TRIGGER forbid_delete_nft_owners_realdb`)
+	require.NoError(t, dropErr)
+}
+
+// TestOwnerDb_UpdateOwnership_ErrorOnInsert_RealDB
+// Forces an INSERT error after the DELETE has succeeded by renaming the table mid-transaction.
+func TestOwnerDb_UpdateOwnership_ErrorOnInsert_RealDB(t *testing.T) {
+	db, ownerDb, nftDb, cleanup := setupTestOwnerDb(t)
+	defer cleanup()
+
+	contract := "0xInsertErrRealDB"
+	tokenID := "InsertErrToken"
+	createNftInDB(t, db, nftDb, contract, tokenID)
+
+	// 1) Mint so we have a valid ownership
+	txMint, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	mint := models.TokenTransfer{
+		From:      constants.NULL_ADDRESS,
+		To:        "0xAliceInsert",
+		Contract:  contract,
+		TokenID:   tokenID,
+		BlockTime: 100,
+		Type:      models.MINT,
+	}
+	err = ownerDb.UpdateOwnership(txMint, mint, 3333)
+	require.NoError(t, err)
+	require.NoError(t, txMint.Commit())
+
+	// 2) Transfer => from Alice to Bob
+	//    We'll rename the `nft_owners` table after the code does the "SELECT" and "DELETE",
+	//    but before the final "INSERT".
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	// Force the "SELECT owner" & "DELETE" to succeed
+	var curOwner string
+	_ = tx.QueryRow("SELECT owner FROM nft_owners WHERE contract=? AND token_id=? AND token_unique_id=?",
+		contract, tokenID, 3333,
+	).Scan(&curOwner)
+
+	// Now rename the table -> any subsequent INSERT in this same Tx will fail
+	_, renameErr := tx.Exec(`ALTER TABLE nft_owners RENAME TO nft_owners_gone_realdb`)
+	require.NoError(t, renameErr)
+
+	transfer := models.TokenTransfer{
+		From:      "0xAliceInsert",
+		To:        "0xBobInsert",
+		Contract:  contract,
+		TokenID:   tokenID,
+		BlockTime: 200,
+		Type:      "transfer",
+	}
+	err = ownerDb.UpdateOwnership(tx, transfer, 3333)
+	assert.Error(t, err, "Expected insert error after table rename")
+
+	_ = tx.Rollback()
+}
+
+func TestOwnerDb_GetBalance_Error_RealDB(t *testing.T) {
+	db, ownerDb, _, cleanup := setupTestOwnerDb(t)
+	defer cleanup()
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	// rename the table
+	_, renameErr := tx.Exec(`ALTER TABLE nft_owners RENAME TO nft_owners_broken_balance`)
+	require.NoError(t, renameErr)
+
+	// Now any SELECT from "nft_owners" will fail
+	balance, err := ownerDb.GetBalance(tx, "0xSomeOwner", "0xAnyContract", "AnyToken")
+	assert.Error(t, err, "Expected an error because table doesn't exist now")
+	assert.Equal(t, uint64(0), balance)
+
+	_ = tx.Rollback()
+}
