@@ -33,6 +33,7 @@ func OpenSqlite(path string) (*sql.DB, error) {
 		PRAGMA synchronous = NORMAL;
 		PRAGMA cache_size = -2000;
 		PRAGMA busy_timeout = 5000;
+		PRAGMA foreign_keys = ON;
 	`)
 	if err != nil {
 		if err := db.Close(); err != nil {
