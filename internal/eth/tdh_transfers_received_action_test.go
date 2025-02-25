@@ -9,10 +9,12 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/6529-Collections/6529node/internal/db/testdb"
 	"github.com/6529-Collections/6529node/internal/eth/ethdb"
+	"github.com/6529-Collections/6529node/internal/eth/mocks"
 	"github.com/6529-Collections/6529node/pkg/tdh/models"
 )
 
@@ -73,6 +75,120 @@ func newDefaultTdhTransfersReceivedAction(t *testing.T, deps *testDefaultTdhTran
 	)
 	require.NotNil(t, orchestrator, "Should successfully create orchestrator instance")
 	return orchestrator
+}
+
+// ------------------------------
+// Mock definitions
+// ------------------------------
+
+type mockNFTDb struct {
+	UpdateSupplyFn         func(txn *sql.Tx, contract, tokenID string) (uint64, error)
+	UpdateBurntSupplyFn    func(txn *sql.Tx, contract, tokenID string) error
+	UpdateSupplyReverseFn  func(txn *sql.Tx, contract, tokenID string) (uint64, error)
+	UpdateBurntSupplyRevFn func(txn *sql.Tx, contract, tokenID string) error
+	GetNftFn               func(txn *sql.Tx, contract, tokenID string) (*ethdb.NFT, error)
+}
+
+func (m *mockNFTDb) UpdateSupply(txn *sql.Tx, contract, tokenID string) (uint64, error) {
+	return m.UpdateSupplyFn(txn, contract, tokenID)
+}
+func (m *mockNFTDb) UpdateBurntSupply(txn *sql.Tx, contract, tokenID string) error {
+	return m.UpdateBurntSupplyFn(txn, contract, tokenID)
+}
+func (m *mockNFTDb) UpdateSupplyReverse(txn *sql.Tx, contract, tokenID string) (uint64, error) {
+	return m.UpdateSupplyReverseFn(txn, contract, tokenID)
+}
+func (m *mockNFTDb) UpdateBurntSupplyReverse(txn *sql.Tx, contract, tokenID string) error {
+	return m.UpdateBurntSupplyRevFn(txn, contract, tokenID)
+}
+func (m *mockNFTDb) GetNft(txn *sql.Tx, contract, tokenID string) (*ethdb.NFT, error) {
+	return m.GetNftFn(txn, contract, tokenID)
+}
+
+type mockOwnerDb struct {
+	GetUniqueIDFn        func(txn *sql.Tx, contract, tokenID, address string) (uint64, error)
+	UpdateOwnershipFn    func(txn *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error
+	UpdateOwnershipRevFn func(txn *sql.Tx, transfer ethdb.NFTTransfer, tokenUniqueID uint64) error
+	GetBalanceFn         func(txn *sql.Tx, owner, contract, tokenID string) (uint64, error)
+}
+
+func (m *mockOwnerDb) GetUniqueID(txn *sql.Tx, contract, tokenID, address string) (uint64, error) {
+	return m.GetUniqueIDFn(txn, contract, tokenID, address)
+}
+func (m *mockOwnerDb) UpdateOwnership(txn *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error {
+	return m.UpdateOwnershipFn(txn, transfer, tokenUniqueID)
+}
+func (m *mockOwnerDb) UpdateOwnershipReverse(txn *sql.Tx, transfer ethdb.NFTTransfer, tokenUniqueID uint64) error {
+	return m.UpdateOwnershipRevFn(txn, transfer, tokenUniqueID)
+}
+func (m *mockOwnerDb) GetBalance(txn *sql.Tx, owner, contract, tokenID string) (uint64, error) {
+	return m.GetBalanceFn(txn, owner, contract, tokenID)
+}
+
+type mockTransferDb struct {
+	StoreTransferFn                  func(tx *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error
+	GetTransfersAfterCheckpointFn    func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error)
+	DeleteTransfersAfterCheckpointFn func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error
+	GetLatestTransferFn              func(tx *sql.Tx) (*ethdb.NFTTransfer, error)
+}
+
+func (m *mockTransferDb) StoreTransfer(tx *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error {
+	return m.StoreTransferFn(tx, transfer, tokenUniqueID)
+}
+func (m *mockTransferDb) GetTransfersAfterCheckpoint(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error) {
+	return m.GetTransfersAfterCheckpointFn(tx, blockNumber, txIndex, logIndex)
+}
+func (m *mockTransferDb) DeleteTransfersAfterCheckpoint(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error {
+	return m.DeleteTransfersAfterCheckpointFn(tx, blockNumber, txIndex, logIndex)
+}
+func (m *mockTransferDb) GetLatestTransfer(tx *sql.Tx) (*ethdb.NFTTransfer, error) {
+	return m.GetLatestTransferFn(tx)
+}
+
+// Utility to quickly create the DefaultTdhTransfersReceivedAction with mocks:
+func newActionWithMocks(
+	t *testing.T,
+	nftDb ethdb.NFTDb,
+	ownerDb ethdb.OwnerDb,
+	transferDb ethdb.TransferDb,
+	trackerDb ethdb.TdhIdxTrackerDb,
+) *DefaultTdhTransfersReceivedAction {
+	ctx := context.Background()
+
+	// We'll pass in a real DB or a stub. For error coverage, you typically only need a real *sql.DB
+	// if you’re testing real SQL logic. If you only want to ensure that tdh_transfers_received_action
+	// properly returns errors from the underlying interfaces, you can pass a nil DB
+	// and override getLastSavedCheckpoint, etc. But let's do a memory DB for the sake of transaction calls.
+	inMemoryDB, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err, "Should open an in-memory DB for the test")
+
+	originalGetLastSavedCheckpoint := getLastSavedCheckpoint
+	getLastSavedCheckpoint = func(tx *sql.Tx) (uint64, uint64, uint64, error) {
+		return 0, 0, 0, nil
+	}
+
+	originalUpdateCheckpoint := updateCheckpoint
+	updateCheckpoint = func(tx *sql.Tx, blockNumber uint64, txIndex uint64, logIndex uint64) error {
+		return nil
+	}
+
+	t.Cleanup(func() {
+		// restore
+		getLastSavedCheckpoint = originalGetLastSavedCheckpoint
+		updateCheckpoint = originalUpdateCheckpoint
+		_ = inMemoryDB.Close()
+	})
+
+	action := NewTdhTransfersReceivedActionImpl(
+		ctx,
+		inMemoryDB,
+		transferDb,
+		ownerDb,
+		nftDb,
+		trackerDb,
+	)
+	require.NotNil(t, action)
+	return action
 }
 
 func TestDefaultTdhTransfersReceivedAction_NoTransfers(t *testing.T) {
@@ -428,65 +544,6 @@ func TestDefaultTdhTransfersReceivedAction_MultipleAmountsInOneTransfer(t *testi
 	_ = txCheck.Rollback()
 }
 
-// func TestDefaultTdhTransfersReceivedAction_ConcurrentHandleCalls_ExpectError(t *testing.T) {
-// 	// We still spin up everything the same way...
-// 	deps := setupTestDefaultTdhTransfersReceivedActionDeps(t)
-// 	defer deps.cleanup()
-
-// 	o := newDefaultTdhTransfersReceivedAction(t, deps)
-
-// 	var wg sync.WaitGroup
-
-// 	transfersA := models.TokenTransferBatch{
-// 		Transfers: []models.TokenTransfer{
-// 			{
-// 				From:        "",
-// 				To:          "0xConcurrentA",
-// 				Contract:    "0xCC",
-// 				TokenID:     "Tid",
-// 				Amount:      1,
-// 				BlockNumber: 400,
-// 				Type:        models.MINT,
-// 			},
-// 		},
-// 		BlockNumber: 400,
-// 	}
-// 	transfersB := models.TokenTransferBatch{
-// 		Transfers: []models.TokenTransfer{
-// 			{
-// 				From:        "",
-// 				To:          "0xConcurrentB",
-// 				Contract:    "0xCC",
-// 				TokenID:     "Tid",
-// 				Amount:      1,
-// 				BlockNumber: 401,
-// 				Type:        models.MINT,
-// 			},
-// 		},
-// 		BlockNumber: 401,
-// 	}
-
-// 	// We'll track each goroutine's error in a slice.
-// 	errs := make([]error, 2)
-
-// 	worker := func(batch models.TokenTransferBatch, idx int) {
-// 		defer wg.Done()
-// 		errs[idx] = o.Handle(batch)
-// 	}
-
-// 	wg.Add(2)
-// 	go worker(transfersA, 0)
-// 	go worker(transfersB, 1)
-// 	wg.Wait()
-
-// 	// We now EXPECT that at least one call fails due to concurrency or checkpoint mismatch.
-// 	if errs[0] == nil && errs[1] == nil {
-// 		t.Error("Expected concurrency error, but both calls surprisingly succeeded")
-// 	} else {
-// 		t.Logf("Worker 0 error: %v\nWorker 1 error: %v", errs[0], errs[1])
-// 	}
-// }
-
 func TestDefaultTdhTransfersReceivedAction_ClosedDbAtConstruction(t *testing.T) {
 	// If we close the DB before constructing the orchestrator, we won't even get a valid orchestrator.
 	deps := setupTestDefaultTdhTransfersReceivedActionDeps(t)
@@ -618,4 +675,713 @@ func TestNewTdhTransfersReceivedActionImpl_Success(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unfulfilled expectations: %s", err)
 	}
+}
+
+// ------------------------------
+// Tests for error paths
+// ------------------------------
+
+// 1) applyTransfer => error from nftDb.UpdateSupply
+func TestDefaultTdhTransfersReceivedAction_ApplyTransfer_ErrorUpdateSupply(t *testing.T) {
+	nftDbMock := &mockNFTDb{
+		UpdateSupplyFn: func(txn *sql.Tx, contract, tokenID string) (uint64, error) {
+			return 0, errors.New("UpdateSupply forced error")
+		},
+	}
+	ownerDbMock := &mockOwnerDb{}
+	transferDbMock := &mockTransferDb{}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	// We do a MINT transfer which calls nftDb.UpdateSupply
+	transfer := models.TokenTransfer{
+		Type:        models.MINT,
+		Contract:    "0xBad",
+		TokenID:     "Token123",
+		BlockNumber: 10,
+		Amount:      1,
+	}
+
+	// We call Handle with a single transfer.
+	err := action.Handle(models.TokenTransferBatch{
+		Transfers:   []models.TokenTransfer{transfer},
+		BlockNumber: 10,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "UpdateSupply forced error")
+}
+
+// 2) applyTransfer => error from nftDb.UpdateBurntSupply (for BURN)
+func TestDefaultTdhTransfersReceivedAction_ApplyTransfer_ErrorUpdateBurntSupply(t *testing.T) {
+	nftDbMock := &mockNFTDb{
+		UpdateBurntSupplyFn: func(txn *sql.Tx, contract, tokenID string) error {
+			return errors.New("UpdateBurntSupply forced error")
+		},
+	}
+	ownerDbMock := &mockOwnerDb{
+		// We must also ensure GetUniqueID returns something valid, or else we’d fail earlier.
+		GetUniqueIDFn: func(txn *sql.Tx, contract, tokenID, address string) (uint64, error) {
+			return 42, nil
+		},
+	}
+	transferDbMock := &mockTransferDb{}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	// BURN => calls nftDb.UpdateBurntSupply
+	transfer := models.TokenTransfer{
+		Type:        models.BURN,
+		Contract:    "0xBurn",
+		TokenID:     "BurnToken",
+		From:        "0xOwner",
+		BlockNumber: 20,
+		Amount:      1,
+	}
+
+	err := action.Handle(models.TokenTransferBatch{
+		Transfers:   []models.TokenTransfer{transfer},
+		BlockNumber: 20,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "UpdateBurntSupply forced error")
+}
+
+// 3) applyTransfer => error from ownerDb.GetUniqueID (for non-mint/airdrop)
+func TestDefaultTdhTransfersReceivedAction_ApplyTransfer_ErrorGetUniqueID(t *testing.T) {
+	nftDbMock := &mockNFTDb{
+		// For any non-mint, we skip UpdateSupply.
+		// For BURN we do UpdateBurntSupply, but let's do e.g. a SEND/SALE transfer
+		UpdateBurntSupplyFn: func(txn *sql.Tx, contract, tokenID string) error {
+			return nil
+		},
+	}
+	ownerDbMock := &mockOwnerDb{
+		GetUniqueIDFn: func(txn *sql.Tx, contract, tokenID, address string) (uint64, error) {
+			return 0, errors.New("GetUniqueID forced error")
+		},
+	}
+	transferDbMock := &mockTransferDb{}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	// For a SEND/SALE: Type=SEND means from->to, we rely on ownerDb.GetUniqueID to find the tokenUniqueID
+	transfer := models.TokenTransfer{
+		Type:        models.SEND,
+		Contract:    "0xSend",
+		TokenID:     "SendToken",
+		From:        "0xFrom",
+		To:          "0xTo",
+		BlockNumber: 30,
+		Amount:      1,
+	}
+
+	err := action.Handle(models.TokenTransferBatch{
+		Transfers:   []models.TokenTransfer{transfer},
+		BlockNumber: 30,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GetUniqueID forced error")
+}
+
+// 4) applyTransfer => error from transferDb.StoreTransfer
+func TestDefaultTdhTransfersReceivedAction_ApplyTransfer_ErrorStoreTransfer(t *testing.T) {
+	nftDbMock := &mockNFTDb{
+		UpdateSupplyFn: func(txn *sql.Tx, contract, tokenID string) (uint64, error) {
+			// Return 1 for minted supply
+			return 1, nil
+		},
+	}
+	ownerDbMock := &mockOwnerDb{}
+	transferDbMock := &mockTransferDb{
+		StoreTransferFn: func(tx *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error {
+			return errors.New("StoreTransfer forced error")
+		},
+	}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	// MINT => calls nftDb.UpdateSupply => success => then calls transferDb.StoreTransfer => error
+	transfer := models.TokenTransfer{
+		Type:        models.MINT,
+		Contract:    "0xMint",
+		TokenID:     "MintToken",
+		BlockNumber: 40,
+		Amount:      1,
+	}
+
+	err := action.Handle(models.TokenTransferBatch{
+		Transfers:   []models.TokenTransfer{transfer},
+		BlockNumber: 40,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "StoreTransfer forced error")
+}
+
+// 5) applyTransfer => error from ownerDb.UpdateOwnership
+func TestDefaultTdhTransfersReceivedAction_ApplyTransfer_ErrorUpdateOwnership(t *testing.T) {
+	nftDbMock := &mockNFTDb{
+		UpdateSupplyFn: func(txn *sql.Tx, contract, tokenID string) (uint64, error) {
+			return 1, nil
+		},
+	}
+	transferDbMock := &mockTransferDb{
+		StoreTransferFn: func(tx *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error {
+			return nil
+		},
+	}
+	ownerDbMock := &mockOwnerDb{
+		UpdateOwnershipFn: func(txn *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error {
+			return errors.New("UpdateOwnership forced error")
+		},
+	}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	xfer := models.TokenTransfer{
+		Type:        models.MINT,
+		Contract:    "0xMint2",
+		TokenID:     "Mint2ID",
+		BlockNumber: 50,
+		Amount:      1,
+	}
+	err := action.Handle(models.TokenTransferBatch{Transfers: []models.TokenTransfer{xfer}, BlockNumber: 50})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "UpdateOwnership forced error")
+}
+
+// 6) applyTransferReverse => error from ownerDb.GetUniqueID
+func TestDefaultTdhTransfersReceivedAction_ApplyTransferReverse_ErrorGetUniqueID(t *testing.T) {
+	nftDbMock := &mockNFTDb{}
+	ownerDbMock := &mockOwnerDb{
+		GetUniqueIDFn: func(txn *sql.Tx, contract, tokenID, address string) (uint64, error) {
+			return 0, errors.New("GetUniqueID forced error in reverse")
+		},
+	}
+	transferDbMock := &mockTransferDb{}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	// Force applyTransferReverse by calling reset, which calls applyTransferReverse
+	// Or we can manually call action.applyTransferReverse in a test if we refactor it to be public.
+	// For simpler coverage, let's use reset logic, which enumerates transfers and calls applyTransferReverse.
+	// We'll mock GetTransfersAfterCheckpoint to return 1 NFTTransfer so that reset will revert it.
+	transferDbMock.GetTransfersAfterCheckpointFn = func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error) {
+		return []ethdb.NFTTransfer{
+			{
+				Type:     models.BURN,
+				Contract: "0xReverseBurn",
+				TokenID:  "ReverseToken",
+				To:       "0xTheBurnAddress",
+			},
+		}, nil
+	}
+	// Other needed mocks
+	transferDbMock.DeleteTransfersAfterCheckpointFn = func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error {
+		return nil
+	}
+	transferDbMock.GetLatestTransferFn = func(tx *sql.Tx) (*ethdb.NFTTransfer, error) {
+		return nil, nil
+	}
+
+	err := action.reset(nil /*tx*/, 999, 0, 0) // we pass nil for *sql.Tx in this contrived scenario
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GetUniqueID forced error in reverse")
+}
+
+// 7) applyTransferReverse => error from nftDb.UpdateBurntSupplyReverse
+func TestDefaultTdhTransfersReceivedAction_ApplyTransferReverse_ErrorUpdateBurntSupplyReverse(t *testing.T) {
+	nftDbMock := &mockNFTDb{
+		UpdateBurntSupplyRevFn: func(txn *sql.Tx, contract, tokenID string) error {
+			return errors.New("UpdateBurntSupplyReverse forced error")
+		},
+	}
+	ownerDbMock := &mockOwnerDb{
+		GetUniqueIDFn: func(txn *sql.Tx, contract, tokenID, address string) (uint64, error) {
+			return 10, nil
+		},
+	}
+	transferDbMock := &mockTransferDb{
+		// We'll feed one BURN transfer to reset
+		GetTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error) {
+			return []ethdb.NFTTransfer{
+				{
+					Type:     models.BURN,
+					Contract: "0xReverseBurn",
+					TokenID:  "ReverseToken",
+					To:       "0xTheBurnAddress",
+				},
+			}, nil
+		},
+		DeleteTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error {
+			return nil
+		},
+		GetLatestTransferFn: func(tx *sql.Tx) (*ethdb.NFTTransfer, error) {
+			return nil, nil
+		},
+	}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	err := action.reset(nil, 10, 0, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "UpdateBurntSupplyReverse forced error")
+}
+
+// 8) applyTransferReverse => error from nftDb.UpdateSupplyReverse (for MINT or AIRDROP)
+func TestDefaultTdhTransfersReceivedAction_ApplyTransferReverse_ErrorUpdateSupplyReverse(t *testing.T) {
+	nftDbMock := &mockNFTDb{
+		UpdateSupplyReverseFn: func(txn *sql.Tx, contract, tokenID string) (uint64, error) {
+			return 0, errors.New("UpdateSupplyReverse forced error")
+		},
+	}
+	ownerDbMock := &mockOwnerDb{
+		GetUniqueIDFn: func(txn *sql.Tx, contract, tokenID, address string) (uint64, error) {
+			return 10, nil
+		},
+	}
+	transferDbMock := &mockTransferDb{
+		GetTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error) {
+			return []ethdb.NFTTransfer{
+				{
+					Type:     models.MINT,
+					Contract: "0xReverseMint",
+					TokenID:  "ReverseToken",
+					To:       "0xReceiver",
+				},
+			}, nil
+		},
+		DeleteTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error {
+			return nil
+		},
+		GetLatestTransferFn: func(tx *sql.Tx) (*ethdb.NFTTransfer, error) {
+			return nil, nil
+		},
+	}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	err := action.reset(nil, 10, 0, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "UpdateSupplyReverse forced error")
+}
+
+// 9) applyTransferReverse => error from ownerDb.UpdateOwnershipReverse
+func TestDefaultTdhTransfersReceivedAction_ApplyTransferReverse_ErrorUpdateOwnershipReverse(t *testing.T) {
+	nftDbMock := &mockNFTDb{}
+	ownerDbMock := &mockOwnerDb{
+		GetUniqueIDFn: func(txn *sql.Tx, contract, tokenID, address string) (uint64, error) {
+			return 11, nil
+		},
+		UpdateOwnershipRevFn: func(txn *sql.Tx, transfer ethdb.NFTTransfer, tokenUniqueID uint64) error {
+			return errors.New("UpdateOwnershipReverse forced error")
+		},
+	}
+	transferDbMock := &mockTransferDb{
+		GetTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error) {
+			return []ethdb.NFTTransfer{
+				{
+					Type:     models.SEND,
+					Contract: "0xC",
+					TokenID:  "TID",
+					To:       "0xReceiver",
+					From:     "0xSender",
+				},
+			}, nil
+		},
+		DeleteTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error {
+			return nil
+		},
+		GetLatestTransferFn: func(tx *sql.Tx) (*ethdb.NFTTransfer, error) {
+			return nil, nil
+		},
+	}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	err := action.reset(nil, 10, 0, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "UpdateOwnershipReverse forced error")
+}
+
+// 10) reset => error from transferDb.GetTransfersAfterCheckpoint
+func TestDefaultTdhTransfersReceivedAction_Reset_ErrorGetTransfersAfterCheckpoint(t *testing.T) {
+	nftDbMock := &mockNFTDb{}
+	ownerDbMock := &mockOwnerDb{}
+	transferDbMock := &mockTransferDb{
+		GetTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error) {
+			return nil, errors.New("GetTransfersAfterCheckpoint forced error")
+		},
+	}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	err := action.reset(nil, 999, 0, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GetTransfersAfterCheckpoint forced error")
+}
+
+// 11) reset => error from applyTransferReverse (already covered above in #6..#9 scenarios).
+// You can just show that if applyTransferReverse fails, reset fails. We can do one example:
+func TestDefaultTdhTransfersReceivedAction_Reset_ErrorDuringApplyTransferReverse(t *testing.T) {
+	// Mock transferDb to return a single NFTTransfer
+	transferDbMock := &mockTransferDb{
+		GetTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error) {
+			return []ethdb.NFTTransfer{
+				{
+					Type:     models.BURN,
+					Contract: "0xC",
+					TokenID:  "T",
+					To:       "0xBurnAddr",
+				},
+			}, nil
+		},
+		DeleteTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error {
+			return nil
+		},
+		GetLatestTransferFn: func(tx *sql.Tx) (*ethdb.NFTTransfer, error) {
+			return nil, nil
+		},
+	}
+
+	nftDbMock := &mockNFTDb{
+		UpdateBurntSupplyRevFn: func(txn *sql.Tx, contract, tokenID string) error {
+			return errors.New("forced error in revert burn")
+		},
+	}
+	ownerDbMock := &mockOwnerDb{
+		GetUniqueIDFn: func(txn *sql.Tx, contract, tokenID, address string) (uint64, error) {
+			return 1, nil
+		},
+	}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	err := action.reset(nil, 100, 0, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "forced error in revert burn")
+}
+
+// 12) reset => error from transferDb.DeleteTransfersAfterCheckpoint
+func TestDefaultTdhTransfersReceivedAction_Reset_ErrorDeleteTransfers(t *testing.T) {
+	transferDbMock := &mockTransferDb{
+		GetTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error) {
+			return []ethdb.NFTTransfer{}, nil
+		},
+		DeleteTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error {
+			return errors.New("DeleteTransfersAfterCheckpoint forced error")
+		},
+		GetLatestTransferFn: func(tx *sql.Tx) (*ethdb.NFTTransfer, error) {
+			return nil, nil
+		},
+	}
+	nftDbMock := &mockNFTDb{}
+	ownerDbMock := &mockOwnerDb{}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	err := action.reset(nil, 100, 0, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DeleteTransfersAfterCheckpoint forced error")
+}
+
+// 13) reset => error from transferDb.GetLatestTransfer
+func TestDefaultTdhTransfersReceivedAction_Reset_ErrorGetLatestTransfer(t *testing.T) {
+	transferDbMock := &mockTransferDb{
+		GetTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error) {
+			return []ethdb.NFTTransfer{}, nil
+		},
+		DeleteTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error {
+			return nil
+		},
+		GetLatestTransferFn: func(tx *sql.Tx) (*ethdb.NFTTransfer, error) {
+			return nil, errors.New("GetLatestTransfer forced error")
+		},
+	}
+	nftDbMock := &mockNFTDb{}
+	ownerDbMock := &mockOwnerDb{}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	err := action.reset(nil, 100, 0, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GetLatestTransfer forced error")
+}
+
+// 14) reset => error from updateCheckpoint
+// We can force that by mocking the updateCheckpoint function. Or we can override it similarly
+// to how we override getLastSavedCheckpoint. For brevity, here’s an example overriding updateCheckpoint:
+func TestDefaultTdhTransfersReceivedAction_Reset_ErrorUpdateCheckpoint(t *testing.T) {
+	transferDbMock := &mockTransferDb{
+		GetTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error) {
+			return []ethdb.NFTTransfer{}, nil
+		},
+		DeleteTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error {
+			return nil
+		},
+		GetLatestTransferFn: func(tx *sql.Tx) (*ethdb.NFTTransfer, error) {
+			return &ethdb.NFTTransfer{
+				BlockNumber:      100,
+				TransactionIndex: 0,
+				LogIndex:         0,
+			}, nil
+		},
+	}
+	nftDbMock := &mockNFTDb{}
+	ownerDbMock := &mockOwnerDb{}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+	origUpdateCheckpoint := updateCheckpoint
+	updateCheckpoint = func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error {
+		return errors.New("updateCheckpoint forced error")
+	}
+	defer func() { updateCheckpoint = origUpdateCheckpoint }()
+
+	err := action.reset(nil, 100, 0, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "updateCheckpoint forced error")
+}
+
+// 15) Handle => error from BeginTx
+// For a true unit test, you might override the DB’s BeginTx using a sqlmock or some technique.
+// Or you can override action.db with a mock that returns an error. Let’s do a minimal approach:
+func TestDefaultTdhTransfersReceivedAction_Handle_ErrorBeginTx(t *testing.T) {
+	// We'll create an action with a DB that is already closed so BeginTx fails:
+	closedDB, _ := sql.Open("sqlite3", ":memory:")
+	closedDB.Close()
+
+	// We can pass real mocks for everything else:
+	nftDbMock := &mockNFTDb{}
+	ownerDbMock := &mockOwnerDb{}
+	transferDbMock := &mockTransferDb{}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	ctx := context.Background()
+	action := &DefaultTdhTransfersReceivedAction{
+		ctx:             ctx,
+		db:              closedDB, // closed so that BeginTx fails
+		progressTracker: trackerDbMock,
+		transferDb:      transferDbMock,
+		ownerDb:         ownerDbMock,
+		nftDb:           nftDbMock,
+	}
+
+	err := action.Handle(models.TokenTransferBatch{
+		Transfers:   []models.TokenTransfer{{Type: models.MINT}},
+		BlockNumber: 999,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "database is closed")
+}
+
+// 16) Handle => error from getLastSavedCheckpoint
+func TestDefaultTdhTransfersReceivedAction_Handle_ErrorGetLastSavedCheckpoint(t *testing.T) {
+	// Minimal setup
+	nftDbMock := &mockNFTDb{}
+	ownerDbMock := &mockOwnerDb{}
+	transferDbMock := &mockTransferDb{}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	// We'll override getLastSavedCheckpoint to return an error:
+	origGetLastSavedCheckpoint := getLastSavedCheckpoint
+	getLastSavedCheckpoint = func(tx *sql.Tx) (uint64, uint64, uint64, error) {
+		return 0, 0, 0, errors.New("forced checkpoint error")
+	}
+	defer func() { getLastSavedCheckpoint = origGetLastSavedCheckpoint }()
+
+	err := action.Handle(models.TokenTransferBatch{
+		Transfers:   []models.TokenTransfer{{Type: models.MINT, BlockNumber: 100, Amount: 1}},
+		BlockNumber: 100,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "forced checkpoint error")
+}
+
+// 17) Handle => error from reset (when checkpoint mismatch occurs)
+func TestDefaultTdhTransfersReceivedAction_Handle_ErrorFromReset(t *testing.T) {
+	// Force an error inside reset, e.g. from GetTransfersAfterCheckpoint
+	transferDbMock := &mockTransferDb{
+		GetTransfersAfterCheckpointFn: func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error) {
+			return nil, errors.New("forced error in reset")
+		},
+	}
+	nftDbMock := &mockNFTDb{}
+	ownerDbMock := &mockOwnerDb{}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	// We'll force a mismatch so that reset is called. Then inside reset, we force an error.
+	// Suppose the last saved checkpoint is block=200. We'll override getLastSavedCheckpoint:
+	origGetLastSavedCheckpoint := getLastSavedCheckpoint
+	getLastSavedCheckpoint = func(tx *sql.Tx) (uint64, uint64, uint64, error) {
+		return 200, 0, 0, nil
+	}
+	defer func() { getLastSavedCheckpoint = origGetLastSavedCheckpoint }()
+
+	// Now we pass in a batch with blockNumber=100 which is less than the last checkpoint=200 => triggers reset
+	err := action.Handle(models.TokenTransferBatch{
+		Transfers:   []models.TokenTransfer{{Type: models.MINT, BlockNumber: 100, Amount: 1}},
+		BlockNumber: 100,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "forced error in reset")
+}
+
+// 18) Handle => error from applyTransfer
+func TestDefaultTdhTransfersReceivedAction_Handle_ErrorFromApplyTransfer(t *testing.T) {
+	// We'll just force an error from applyTransfer by mocking nftDb.UpdateSupply
+	nftDbMock := &mockNFTDb{
+		UpdateSupplyFn: func(txn *sql.Tx, contract, tokenID string) (uint64, error) {
+			return 0, errors.New("some forced applyTransfer error")
+		},
+	}
+	transferDbMock := &mockTransferDb{}
+	ownerDbMock := &mockOwnerDb{}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	err := action.Handle(models.TokenTransferBatch{
+		Transfers: []models.TokenTransfer{
+			{Type: models.MINT, BlockNumber: 300, Amount: 1},
+		},
+		BlockNumber: 300,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "some forced applyTransfer error")
+}
+
+// 19) Handle => error from updateCheckpoint (after applyTransfer)
+func TestDefaultTdhTransfersReceivedAction_Handle_ErrorUpdateCheckpoint(t *testing.T) {
+	// Setup minimal mocks
+	nftDbMock := &mockNFTDb{
+		UpdateSupplyFn: func(txn *sql.Tx, contract, tokenID string) (uint64, error) {
+			return 1, nil
+		},
+	}
+	ownerDbMock := &mockOwnerDb{}
+	transferDbMock := &mockTransferDb{}
+	trackerDbMock := new(mocks.TdhIdxTrackerDb)
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
+
+	origUpdateCheckpoint := updateCheckpoint
+	updateCheckpoint = func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error {
+		return errors.New("forced updateCheckpoint error")
+	}
+	defer func() { updateCheckpoint = origUpdateCheckpoint }()
+
+	err := action.Handle(models.TokenTransferBatch{
+		Transfers:   []models.TokenTransfer{{Type: models.MINT, BlockNumber: 400}},
+		BlockNumber: 400,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "forced updateCheckpoint error")
+}
+
+// 20) Handle => error from tx.Commit
+// We can simulate this by wrapping the DB or using a DB that fails on commit.
+// One trick is to use a driver or a sqlmock that triggers an error on commit.
+// For brevity, we might simply pass a DB that is forcibly closed inside the transaction.
+func TestDefaultTdhTransfersReceivedAction_Handle_ErrorCommit(t *testing.T) {
+	// We'll do it by hooking the DB after we begin the transaction:
+	// This can be tricky to simulate exactly in normal code without sqlmock.
+	// Let’s show a concept with a real DB that we forcibly close after we start the transaction.
+
+	inMemoryDB, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	defer inMemoryDB.Close()
+
+	// Create the action that uses inMemoryDB:
+	ctx := context.Background()
+	action := &DefaultTdhTransfersReceivedAction{
+		ctx:             ctx,
+		db:              inMemoryDB,
+		progressTracker: new(mocks.TdhIdxTrackerDb),
+		transferDb:      &mockTransferDb{},
+		ownerDb:         &mockOwnerDb{},
+		nftDb: &mockNFTDb{
+			UpdateSupplyFn: func(txn *sql.Tx, contract, tokenID string) (uint64, error) {
+				return 1, nil
+			},
+		},
+	}
+
+	// We can open a transaction, close the DB, and then cause the real .Handle to attempt commit, which fails.
+	_, err = inMemoryDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	// Now forcibly close the DB (the transaction is still open).
+	_ = inMemoryDB.Close()
+
+	// Actually calling .Handle => it will do BeginTx (which might fail or succeed if there's some leftover state).
+	// If it succeeds, the final commit will fail because the DB is closed.
+
+	transfers := []models.TokenTransfer{
+		{Type: models.MINT, BlockNumber: 500},
+	}
+	batch := models.TokenTransferBatch{
+		Transfers:   transfers,
+		BlockNumber: 500,
+	}
+
+	errHandle := action.Handle(batch)
+	require.Error(t, errHandle)
+	assert.Contains(t, errHandle.Error(), "database is closed")
+}
+
+// 21) Handle => error from progressTracker.SetProgress
+func TestDefaultTdhTransfersReceivedAction_Handle_ErrorSetProgress(t *testing.T) {
+	mIdxTracker := new(mocks.TdhIdxTrackerDb)
+	mIdxTracker.On("SetProgress", uint64(900), mock.Anything).Return(errors.New("forced SetProgress error"))
+	mIdxTracker.On("GetProgress").Return(uint64(0), nil)
+
+	nftDbMock := &mockNFTDb{
+		UpdateSupplyFn: func(txn *sql.Tx, contract, tokenID string) (uint64, error) {
+			return 1, nil
+		},
+	}
+	ownerDbMock := &mockOwnerDb{
+		UpdateOwnershipFn: func(txn *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error {
+			// Return nil to simulate successful ownership update.
+			return nil
+		},
+	}
+	transferDbMock := &mockTransferDb{
+		StoreTransferFn: func(tx *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error {
+			return nil
+		},
+	}
+
+	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, mIdxTracker)
+	xfer := models.TokenTransfer{
+		Type:        models.MINT,
+		Contract:    "0xAny",
+		TokenID:     "any",
+		BlockNumber: 900,
+		Amount:      1,
+	}
+
+	err := action.Handle(models.TokenTransferBatch{
+		Transfers:   []models.TokenTransfer{xfer},
+		BlockNumber: 900,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "forced SetProgress error")
 }

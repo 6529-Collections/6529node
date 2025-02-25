@@ -5,5 +5,3 @@ DROP INDEX IF EXISTS idx_nft_burnt_supply;
 
 DROP TABLE IF EXISTS nfts;
 
-
-DROP TABLE IF EXISTS token_transfers_checkpoint;

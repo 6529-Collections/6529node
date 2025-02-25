@@ -299,14 +299,14 @@ var getLastSavedCheckpoint = func(tx *sql.Tx) (uint64, uint64, uint64, error) {
 	return checkpoint.BlockNumber, checkpoint.TransactionIndex, checkpoint.LogIndex, nil
 }
 
-func updateCheckpoint(tx *sql.Tx, blockNumber uint64, txIndex uint64, logIndex uint64) error {
+var updateCheckpoint = func(tx *sql.Tx, blockNumber uint64, txIndex uint64, logIndex uint64) error {
 	_, err := tx.Exec(`
 		INSERT INTO token_transfers_checkpoint (id, block_number, transaction_index, log_index)
-VALUES (1, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET 
-    block_number = excluded.block_number,
-    transaction_index = excluded.transaction_index,
-    log_index = excluded.log_index;`,
+	VALUES (1, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET 
+		block_number = excluded.block_number,
+		transaction_index = excluded.transaction_index,
+		log_index = excluded.log_index;`,
 		blockNumber, txIndex, logIndex)
 
 	return err
