@@ -526,3 +526,93 @@ func TestNFTDb_NilTransaction(t *testing.T) {
 	_, err := nftDB.UpdateSupply(nil, "0xNilTx", "TokenNilTx")
 	require.Error(t, err, "Expected error or panic with nil Tx")
 }
+
+func TestNFTDb_UpdateSupplyReverse_ForceErrorOnUpdate(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
+	defer cleanup()
+
+	// 1) Create an NFT => supply=3
+	{
+		tx, err := db.BeginTx(context.Background(), nil)
+		require.NoError(t, err)
+		_, err = nftDB.UpdateSupply(tx, "0xPartialErr", "TokenPartialErr")
+		require.NoError(t, err)
+		_, err = nftDB.UpdateSupply(tx, "0xPartialErr", "TokenPartialErr")
+		require.NoError(t, err)
+		_, err = nftDB.UpdateSupply(tx, "0xPartialErr", "TokenPartialErr")
+		require.NoError(t, err)
+		require.NoError(t, tx.Commit())
+	}
+
+	// 2) Now in a new Tx, rename 'nfts' => create a view named 'nfts'
+	tx2, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	// rename table
+	_, err = tx2.Exec("ALTER TABLE nfts RENAME TO real_nfts;")
+	require.NoError(t, err)
+
+	// create a NON-updatable view with the same columns
+	// We use an aggregate function (e.g. burnt_supply+0) to ensure it's not updatable.
+	_, err = tx2.Exec(`
+		CREATE VIEW nfts AS
+		SELECT contract, token_id, supply, burnt_supply+0 as burnt_supply
+		FROM real_nfts;
+	`)
+	require.NoError(t, err)
+
+	// 3) Attempt UpdateSupplyReverse => SELECT part will succeed,
+	// but the UPDATE should fail since 'nfts' is now a non-updatable view.
+	// Because the NFT *exists*, we won't trigger the sql.ErrNoRows case.
+	// We'll only fail on the final UPDATE.
+	newSupply, err := nftDB.UpdateSupplyReverse(tx2, "0xPartialErr", "TokenPartialErr")
+
+	// We expect an error from the UPDATE statement
+	require.Error(t, err, "UPDATE on a non-updatable view should fail")
+	assert.Equal(t, uint64(0), newSupply, "We didn't get a new supply because it should fail before returning")
+
+	_ = tx2.Rollback()
+}
+
+func TestNFTDb_UpdateBurntSupplyReverse_ForceErrorOnUpdate(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
+	defer cleanup()
+
+	// 1) Create NFT => supply=2 => burnt=1
+	{
+		tx, err := db.BeginTx(context.Background(), nil)
+		require.NoError(t, err)
+		// supply => 2
+		_, err = nftDB.UpdateSupply(tx, "0xPartialBurnErr", "TokenPartialBurnErr")
+		require.NoError(t, err)
+		_, err = nftDB.UpdateSupply(tx, "0xPartialBurnErr", "TokenPartialBurnErr")
+		require.NoError(t, err)
+		// burn => burnt=1
+		err = nftDB.UpdateBurntSupply(tx, "0xPartialBurnErr", "TokenPartialBurnErr")
+		require.NoError(t, err)
+
+		require.NoError(t, tx.Commit())
+	}
+
+	// 2) Replace the real 'nfts' with a non-updatable view
+	tx2, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	_, err = tx2.Exec("ALTER TABLE nfts RENAME TO real_nfts;")
+	require.NoError(t, err)
+
+	_, err = tx2.Exec(`
+		CREATE VIEW nfts AS
+		SELECT contract, token_id, supply, burnt_supply+0 as burnt_supply
+		FROM real_nfts;
+	`)
+	require.NoError(t, err)
+
+	// 3) Now call UpdateBurntSupplyReverse => the SELECT should succeed
+	// (burnt_supply = 1) => no error from that part =>
+	// but the final UPDATE fails because it's a view.
+	err = nftDB.UpdateBurntSupplyReverse(tx2, "0xPartialBurnErr", "TokenPartialBurnErr")
+	require.Error(t, err, "Expect error updating a non-updatable view")
+
+	_ = tx2.Rollback()
+}
