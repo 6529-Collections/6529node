@@ -3,7 +3,7 @@
 package mocks
 
 import (
-	tokens "github.com/6529-Collections/6529node/pkg/tdh/tokens"
+	models "github.com/6529-Collections/6529node/pkg/tdh/models"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -13,7 +13,7 @@ type TokensTransfersWatcher struct {
 }
 
 // WatchTransfers provides a mock function with given fields: contracts, startBlock, transfersChan, tipReachedChan
-func (_m *TokensTransfersWatcher) WatchTransfers(contracts []string, startBlock uint64, transfersChan chan<- tokens.TokenTransferBatch, tipReachedChan chan<- bool) error {
+func (_m *TokensTransfersWatcher) WatchTransfers(contracts []string, startBlock uint64, transfersChan chan<- models.TokenTransferBatch, tipReachedChan chan<- bool) error {
 	ret := _m.Called(contracts, startBlock, transfersChan, tipReachedChan)
 
 	if len(ret) == 0 {
@@ -21,7 +21,7 @@ func (_m *TokensTransfersWatcher) WatchTransfers(contracts []string, startBlock 
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func([]string, uint64, chan<- tokens.TokenTransferBatch, chan<- bool) error); ok {
+	if rf, ok := ret.Get(0).(func([]string, uint64, chan<- models.TokenTransferBatch, chan<- bool) error); ok {
 		r0 = rf(contracts, startBlock, transfersChan, tipReachedChan)
 	} else {
 		r0 = ret.Error(0)

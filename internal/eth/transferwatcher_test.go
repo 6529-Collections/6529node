@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/6529-Collections/6529node/internal/eth/mocks"
-	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
+	"github.com/6529-Collections/6529node/pkg/tdh/models"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -103,11 +103,11 @@ func TestDefaultTokensTransfersWatcher(t *testing.T) {
 }
 
 func testGroupLogsByBlock(t *testing.T) {
-	logs1 := tokens.TokenTransfer{BlockNumber: 100, TransactionIndex: 1, LogIndex: 1}
-	logs2 := tokens.TokenTransfer{BlockNumber: 100, TransactionIndex: 1, LogIndex: 2}
-	logs3 := tokens.TokenTransfer{BlockNumber: 101, TransactionIndex: 0, LogIndex: 0}
+	logs1 := models.TokenTransfer{BlockNumber: 100, TransactionIndex: 1, LogIndex: 1}
+	logs2 := models.TokenTransfer{BlockNumber: 100, TransactionIndex: 1, LogIndex: 2}
+	logs3 := models.TokenTransfer{BlockNumber: 101, TransactionIndex: 0, LogIndex: 0}
 
-	decoded := []tokens.TokenTransfer{logs1, logs2, logs3}
+	decoded := []models.TokenTransfer{logs1, logs2, logs3}
 
 	groups := groupLogsByBlock(decoded)
 	assert.Len(t, groups, 2)
@@ -158,14 +158,14 @@ func testWatchTransfersSimplePolling(t *testing.T) {
 		Return(sampleLogs, nil).
 		Maybe()
 
-	t10 := tokens.TokenTransfer{BlockNumber: 10, LogIndex: 0}
-	t12 := tokens.TokenTransfer{BlockNumber: 12, LogIndex: 1}
+	t10 := models.TokenTransfer{BlockNumber: 10, LogIndex: 0}
+	t12 := models.TokenTransfer{BlockNumber: 12, LogIndex: 1}
 	mockDecoder.On("Decode", sampleLogs).
-		Return([][]tokens.TokenTransfer{{t10, t12}}).
+		Return([][]models.TokenTransfer{{t10, t12}}, nil).
 		Maybe()
 
 	mockSalesDetector.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
-		Return(map[int]tokens.TransferType{0: tokens.SEND, 1: tokens.SEND}, nil).
+		Return(map[int]models.TransferType{0: models.SEND, 1: models.SEND}, nil).
 		Maybe()
 
 	safeHash := makeHash(0xAB)
@@ -180,7 +180,7 @@ func testWatchTransfersSimplePolling(t *testing.T) {
 		Return(nil).
 		Maybe()
 
-	transfersChan := make(chan tokens.TokenTransferBatch, 10)
+	transfersChan := make(chan models.TokenTransferBatch, 10)
 	tipReachedChan := make(chan bool, 1)
 
 	doneCh := make(chan struct{})
@@ -195,7 +195,7 @@ func testWatchTransfersSimplePolling(t *testing.T) {
 		close(doneCh)
 	}()
 
-	var batch tokens.TokenTransferBatch
+	var batch models.TokenTransferBatch
 	select {
 	case batch = <-transfersChan:
 	case <-time.After(1 * time.Second):
@@ -297,29 +297,29 @@ func testWatchTransfersSubscription(t *testing.T) {
 		Maybe()
 
 	mockDecoder.On("Decode", mock.Anything).
-		Return(func(all []types.Log) [][]tokens.TokenTransfer {
+		Return(func(all []types.Log) [][]models.TokenTransfer {
 			if len(all) == 0 {
 				return nil
 			}
-			byBlock := make(map[uint64][]tokens.TokenTransfer)
+			byBlock := make(map[uint64][]models.TokenTransfer)
 			for _, lg := range all {
-				tr := tokens.TokenTransfer{
+				tr := models.TokenTransfer{
 					BlockNumber:      lg.BlockNumber,
 					TransactionIndex: uint64(lg.TxIndex),
 					LogIndex:         uint64(lg.Index),
 				}
 				byBlock[lg.BlockNumber] = append(byBlock[lg.BlockNumber], tr)
 			}
-			var out [][]tokens.TokenTransfer
+			var out [][]models.TokenTransfer
 			for _, btrs := range byBlock {
 				out = append(out, btrs)
 			}
 			return out
-		}).
+		}, nil).
 		Maybe()
 
 	mockSalesDetector.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
-		Return(map[int]tokens.TransferType{0: tokens.SEND}, nil).
+		Return(map[int]models.TransferType{0: models.SEND}, nil).
 		Maybe()
 
 	mockClient.On("HeaderByNumber", mock.Anything, mock.MatchedBy(
@@ -336,7 +336,7 @@ func testWatchTransfersSubscription(t *testing.T) {
 			return nil
 		}, nil).Maybe()
 
-	transfersChan := make(chan tokens.TokenTransferBatch, 10)
+	transfersChan := make(chan models.TokenTransferBatch, 10)
 	tipReachedChan := make(chan bool, 1)
 
 	doneCh := make(chan error, 1)
@@ -350,7 +350,7 @@ func testWatchTransfersSubscription(t *testing.T) {
 		doneCh <- err
 	}()
 
-	var allTransfers []tokens.TokenTransfer
+	var allTransfers []models.TokenTransfer
 	for i := 0; i < 3; i++ {
 		select {
 		case batch := <-transfersChan:
@@ -414,7 +414,7 @@ func testReorgDetected(t *testing.T) {
 		Return(nil).
 		Once()
 
-	transfersChan := make(chan tokens.TokenTransferBatch, 1)
+	transfersChan := make(chan models.TokenTransferBatch, 1)
 
 	err := watcher.processRangeAdaptive(
 		nil,
@@ -528,17 +528,17 @@ func testPollingErrorAndRecovery(t *testing.T) {
 		Maybe()
 
 	mockDecoder.On("Decode", successLogs).
-		Return([][]tokens.TokenTransfer{
+		Return([][]models.TokenTransfer{
 			{
 				{BlockNumber: 1, LogIndex: 0},
 				{BlockNumber: 2, LogIndex: 0},
 			},
-		}).Once()
+		}, nil).Once()
 
 	mockSales.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
-		Return(map[int]tokens.TransferType{
-			0: tokens.SEND,
-			1: tokens.SEND,
+		Return(map[int]models.TransferType{
+			0: models.SEND,
+			1: models.SEND,
 		}, nil).Maybe()
 
 	safeHash := makeHash(0xAB)
@@ -554,7 +554,7 @@ func testPollingErrorAndRecovery(t *testing.T) {
 		Return(nil).
 		Maybe()
 
-	transfersChan := make(chan tokens.TokenTransferBatch, 10)
+	transfersChan := make(chan models.TokenTransferBatch, 10)
 	tipChan := make(chan bool, 1)
 
 	doneCh := make(chan error)
@@ -568,7 +568,7 @@ func testPollingErrorAndRecovery(t *testing.T) {
 		doneCh <- err
 	}()
 
-	var allTransfers []tokens.TokenTransfer
+	var allTransfers []models.TokenTransfer
 readLoop:
 	for {
 		select {
@@ -631,12 +631,12 @@ func testCancelContextMidway(t *testing.T) {
 		Return(nil).
 		Maybe()
 
-	mockDecoder.On("Decode", mock.Anything).Return(nil).Maybe()
+	mockDecoder.On("Decode", mock.Anything).Return([][]models.TokenTransfer{}, nil).Maybe()
 	mockSales.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
-		Return(map[int]tokens.TransferType{}, nil).
+		Return(map[int]models.TransferType{}, nil).
 		Maybe()
 
-	transfersChan := make(chan tokens.TokenTransferBatch, 10)
+	transfersChan := make(chan models.TokenTransferBatch, 10)
 	tipChan := make(chan bool, 10)
 
 	doneCh := make(chan error)
@@ -727,12 +727,12 @@ func testLargeBlockRange(t *testing.T) {
 	mockBlockDb.On("SetHash", mock.AnythingOfType("uint64"), mock.AnythingOfType("common.Hash")).
 		Return(nil).
 		Maybe()
-	mockDecoder.On("Decode", mock.Anything).Return(nil).Maybe()
+	mockDecoder.On("Decode", mock.Anything).Return([][]models.TokenTransfer{}, nil).Maybe()
 	mockSales.On("DetectIfSale", mock.Anything, mock.AnythingOfType("common.Hash"), mock.Anything).
-		Return(map[int]tokens.TransferType{}, nil).
+		Return(map[int]models.TransferType{}, nil).
 		Maybe()
 
-	transfersChan := make(chan tokens.TokenTransferBatch, 1000)
+	transfersChan := make(chan models.TokenTransferBatch, 1000)
 	tipChan := make(chan bool, 10)
 
 	doneCh := make(chan error, 1)
@@ -814,26 +814,26 @@ func testWatchTransfersSaleDetectionSuccess(t *testing.T) {
 		Return(logs, nil).
 		Once()
 
-	txa1 := tokens.TokenTransfer{
+	txa1 := models.TokenTransfer{
 		TxHash:      "0xABC",
 		BlockNumber: 100,
 		LogIndex:    1,
-		Type:        tokens.SEND,
+		Type:        models.SEND,
 	}
-	txa2 := tokens.TokenTransfer{
+	txa2 := models.TokenTransfer{
 		TxHash:      "0xABC",
 		BlockNumber: 100,
 		LogIndex:    2,
-		Type:        tokens.SEND,
+		Type:        models.SEND,
 	}
-	txb1 := tokens.TokenTransfer{
+	txb1 := models.TokenTransfer{
 		TxHash:      "0xDEF",
 		BlockNumber: 100,
 		LogIndex:    3,
-		Type:        tokens.SEND,
+		Type:        models.SEND,
 	}
 	mockDecoder.On("Decode", logs).
-		Return([][]tokens.TokenTransfer{{txa1, txa2, txb1}}).
+		Return([][]models.TokenTransfer{{txa1, txa2, txb1}}, nil).
 		Once()
 
 	mockBlockDb.On("GetHash", mock.MatchedBy(func(b uint64) bool { return b < 100 })).
@@ -850,14 +850,14 @@ func testWatchTransfersSaleDetectionSuccess(t *testing.T) {
 		Return(makeHeader(100, makeHash(0xBE)), nil).
 		Once()
 
-	mockSales.On("DetectIfSale", mock.Anything, txHashA, mock.AnythingOfType("[]tokens.TokenTransfer")).
-		Return(map[int]tokens.TransferType{0: tokens.SALE, 1: tokens.SEND}, nil).
+	mockSales.On("DetectIfSale", mock.Anything, txHashA, mock.AnythingOfType("[]models.TokenTransfer")).
+		Return(map[int]models.TransferType{0: models.SALE, 1: models.SEND}, nil).
 		Once()
-	mockSales.On("DetectIfSale", mock.Anything, txHashB, mock.AnythingOfType("[]tokens.TokenTransfer")).
-		Return(map[int]tokens.TransferType{0: tokens.AIRDROP}, nil).
+	mockSales.On("DetectIfSale", mock.Anything, txHashB, mock.AnythingOfType("[]models.TokenTransfer")).
+		Return(map[int]models.TransferType{0: models.AIRDROP}, nil).
 		Once()
 
-	transfersChan := make(chan tokens.TokenTransferBatch, 10)
+	transfersChan := make(chan models.TokenTransferBatch, 10)
 	tipChan := make(chan bool, 1)
 
 	doneCh := make(chan error)
@@ -871,16 +871,16 @@ func testWatchTransfersSaleDetectionSuccess(t *testing.T) {
 		doneCh <- err
 	}()
 
-	var batch tokens.TokenTransferBatch
+	var batch models.TokenTransferBatch
 	select {
 	case batch = <-transfersChan:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Did not receive expected NFT transfers in time")
 	}
 	assert.Len(t, batch.Transfers, 3)
-	assert.Equal(t, tokens.SALE, batch.Transfers[0].Type, "first => SALE")
-	assert.Equal(t, tokens.SEND, batch.Transfers[1].Type, "second => SEND")
-	assert.Equal(t, tokens.AIRDROP, batch.Transfers[2].Type, "third => AIRDROP")
+	assert.Equal(t, models.SALE, batch.Transfers[0].Type, "first => SALE")
+	assert.Equal(t, models.SEND, batch.Transfers[1].Type, "second => SEND")
+	assert.Equal(t, models.AIRDROP, batch.Transfers[2].Type, "third => AIRDROP")
 
 	cancel()
 	select {
@@ -935,14 +935,14 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 		Return(logs, nil).
 		Once()
 
-	transferErr := tokens.TokenTransfer{
+	transferErr := models.TokenTransfer{
 		TxHash:      "0xBAD",
 		BlockNumber: 200,
 		LogIndex:    3,
-		Type:        tokens.SEND,
+		Type:        models.SEND,
 	}
 	mockDecoder.On("Decode", logs).
-		Return([][]tokens.TokenTransfer{{transferErr}}).
+		Return([][]models.TokenTransfer{{transferErr}}, nil).
 		Once()
 
 	mockBlockDb.On("GetHash", mock.MatchedBy(func(b uint64) bool { return b < 200 })).
@@ -963,7 +963,7 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 		Return(nil, errors.New("some sale detection error")).
 		Once()
 
-	transfersChan := make(chan tokens.TokenTransferBatch, 10)
+	transfersChan := make(chan models.TokenTransferBatch, 10)
 	tipChan := make(chan bool, 1)
 
 	doneCh := make(chan error)
@@ -977,14 +977,14 @@ func testWatchTransfersSaleDetectionError(t *testing.T) {
 		doneCh <- err
 	}()
 
-	var batch tokens.TokenTransferBatch
+	var batch models.TokenTransferBatch
 	select {
 	case batch = <-transfersChan:
 	case <-time.After(time.Second):
 		t.Fatal("No NFT transfers were emitted!")
 	}
 	assert.Len(t, batch.Transfers, 1)
-	assert.Equal(t, tokens.SEND, batch.Transfers[0].Type, "Sale detection error => remains SEND")
+	assert.Equal(t, models.SEND, batch.Transfers[0].Type, "Sale detection error => remains SEND")
 
 	cancel()
 	select {
@@ -1003,7 +1003,7 @@ func testAdaptiveFetch(t *testing.T) {
 
 	mockClient := mocks.NewEthClient(t)
 	blockDb := NewInMemoryBlockHashDb()
-	decoder := NewDefaultEthTransactionLogsDecoder()
+	decoder := NewDefaultEthTransactionLogsDecoder(ctx, mockClient)
 	salesDetector := NewDefaultSalesDetector(mockClient)
 
 	watcher := &DefaultTokensTransfersWatcher{
@@ -1034,7 +1034,7 @@ func testAdaptiveFetch(t *testing.T) {
 			return fine
 		}, nil).Maybe()
 
-	transfersChan := make(chan tokens.TokenTransferBatch, 10000)
+	transfersChan := make(chan models.TokenTransferBatch, 10000)
 
 	doneCh := make(chan error, 1)
 	go func() {

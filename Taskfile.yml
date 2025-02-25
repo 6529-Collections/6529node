@@ -1,7 +1,6 @@
-version: '3'
+version: "3"
 
 tasks:
-
   install-dev-tools:
     desc: Install dev tools (golangci-lint, goimports, etc.) in case they are missing
     cmds:
@@ -9,8 +8,7 @@ tasks:
       - go install golang.org/x/tools/cmd/goimports@latest
       - go install github.com/vektra/mockery/v2@v2.51.0
 
-  tidy:
-    go mod tidy
+  tidy: go mod tidy
 
   build:
     desc: Build the Go application
@@ -26,6 +24,11 @@ tasks:
     desc: Run all tests
     cmds:
       - go test ./... -race
+
+  sqlite-cli:
+    desc: Open the SQLite CLI
+    cmds:
+      - sqlite3 ./db/sqlite/sqlite
 
   format:
     desc: Format code and fix imports
@@ -46,7 +49,7 @@ tasks:
     desc: "Create a test coverage report"
     cmds:
       - go test ./... -coverprofile=coverage.out
-      
+
   build-linux:
     desc: "Build for Linux (amd64)"
     cmds:
