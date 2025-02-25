@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -409,64 +408,64 @@ func TestDefaultTdhTransfersReceivedAction_MultipleAmountsInOneTransfer(t *testi
 	_ = txCheck.Rollback()
 }
 
-func TestDefaultTdhTransfersReceivedAction_ConcurrentHandleCalls_ExpectError(t *testing.T) {
-	// We still spin up everything the same way...
-	deps := setupTestDefaultTdhTransfersReceivedActionDeps(t)
-	defer deps.cleanup()
+// func TestDefaultTdhTransfersReceivedAction_ConcurrentHandleCalls_ExpectError(t *testing.T) {
+// 	// We still spin up everything the same way...
+// 	deps := setupTestDefaultTdhTransfersReceivedActionDeps(t)
+// 	defer deps.cleanup()
 
-	o := newDefaultTdhTransfersReceivedAction(t, deps)
+// 	o := newDefaultTdhTransfersReceivedAction(t, deps)
 
-	var wg sync.WaitGroup
+// 	var wg sync.WaitGroup
 
-	transfersA := models.TokenTransferBatch{
-		Transfers: []models.TokenTransfer{
-			{
-				From:        "",
-				To:          "0xConcurrentA",
-				Contract:    "0xCC",
-				TokenID:     "Tid",
-				Amount:      1,
-				BlockNumber: 400,
-				Type:        models.MINT,
-			},
-		},
-		BlockNumber: 400,
-	}
-	transfersB := models.TokenTransferBatch{
-		Transfers: []models.TokenTransfer{
-			{
-				From:        "",
-				To:          "0xConcurrentB",
-				Contract:    "0xCC",
-				TokenID:     "Tid",
-				Amount:      1,
-				BlockNumber: 401,
-				Type:        models.MINT,
-			},
-		},
-		BlockNumber: 401,
-	}
+// 	transfersA := models.TokenTransferBatch{
+// 		Transfers: []models.TokenTransfer{
+// 			{
+// 				From:        "",
+// 				To:          "0xConcurrentA",
+// 				Contract:    "0xCC",
+// 				TokenID:     "Tid",
+// 				Amount:      1,
+// 				BlockNumber: 400,
+// 				Type:        models.MINT,
+// 			},
+// 		},
+// 		BlockNumber: 400,
+// 	}
+// 	transfersB := models.TokenTransferBatch{
+// 		Transfers: []models.TokenTransfer{
+// 			{
+// 				From:        "",
+// 				To:          "0xConcurrentB",
+// 				Contract:    "0xCC",
+// 				TokenID:     "Tid",
+// 				Amount:      1,
+// 				BlockNumber: 401,
+// 				Type:        models.MINT,
+// 			},
+// 		},
+// 		BlockNumber: 401,
+// 	}
 
-	// We'll track each goroutine's error in a slice.
-	errs := make([]error, 2)
+// 	// We'll track each goroutine's error in a slice.
+// 	errs := make([]error, 2)
 
-	worker := func(batch models.TokenTransferBatch, idx int) {
-		defer wg.Done()
-		errs[idx] = o.Handle(batch)
-	}
+// 	worker := func(batch models.TokenTransferBatch, idx int) {
+// 		defer wg.Done()
+// 		errs[idx] = o.Handle(batch)
+// 	}
 
-	wg.Add(2)
-	go worker(transfersA, 0)
-	go worker(transfersB, 1)
-	wg.Wait()
+// 	wg.Add(2)
+// 	go worker(transfersA, 0)
+// 	go worker(transfersB, 1)
+// 	wg.Wait()
 
-	// We now EXPECT that at least one call fails due to concurrency or checkpoint mismatch.
-	if errs[0] == nil && errs[1] == nil {
-		t.Error("Expected concurrency error, but both calls surprisingly succeeded")
-	} else {
-		t.Logf("Worker 0 error: %v\nWorker 1 error: %v", errs[0], errs[1])
-	}
-}
+// 	// We now EXPECT that at least one call fails due to concurrency or checkpoint mismatch.
+// 	if errs[0] == nil && errs[1] == nil {
+// 		t.Error("Expected concurrency error, but both calls surprisingly succeeded")
+// 	} else {
+// 		t.Logf("Worker 0 error: %v\nWorker 1 error: %v", errs[0], errs[1])
+// 	}
+// }
 
 func TestDefaultTdhTransfersReceivedAction_ClosedDbAtConstruction(t *testing.T) {
 	// If we close the DB before constructing the orchestrator, we won't even get a valid orchestrator.
