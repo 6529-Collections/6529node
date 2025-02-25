@@ -1126,17 +1126,16 @@ func TestGetBalance_QueryError(t *testing.T) {
 	tokenID := "some-token"
 
 	// Prepare expected SQL query with proper escaping.
-	query := regexp.QuoteMeta("SELECT count(*) FROM nft_owners WHERE contract = ? AND token_id = ? AND owner = ?")
+	query := regexp.QuoteMeta("SELECT count(*) FROM nft_owners WHERE owner = ? AND contract = ? AND token_id = ?")
 	// Simulate a generic query error.
 	mock.ExpectQuery(query).
-		WithArgs(contract, tokenID, owner).
+		WithArgs(owner, contract, tokenID).
 		WillReturnError(errors.New("query error"))
 
 	ownerDbImpl := &OwnerDbImpl{}
 	balance, err := ownerDbImpl.GetBalance(tx, owner, contract, tokenID)
-	if err == nil || err.Error() != "query error" {
-		t.Errorf("expected query error, got balance=%d, err=%v", balance, err)
-	}
+	assert.Equal(t, uint64(0), balance)
+	assert.Error(t, err)
 
 	// Expect transaction rollback.
 	mock.ExpectRollback()
@@ -1176,4 +1175,11 @@ func TestGetBalance_NoRows(t *testing.T) {
 
 	assert.Equal(t, uint64(0), balance)
 	assert.NoError(t, err)
+
+	mock.ExpectRollback()
+	_ = tx.Rollback()
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %s", err)
+	}
 }
