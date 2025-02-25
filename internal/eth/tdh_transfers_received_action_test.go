@@ -3,9 +3,11 @@ package eth
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -38,6 +40,24 @@ func setupTestDefaultTdhTransfersReceivedActionDeps(t *testing.T) *testDefaultTd
 		ownerDb:         ownerDb,
 		nftDb:           nftDb,
 		cleanup:         cleanup,
+	}
+}
+
+func setupTestDefaultTdhTransfersReceivedActionDepsUsingDB(db *sql.DB) *testDefaultTdhTransfersReceivedActionDeps {
+	progressTracker := ethdb.NewTdhIdxTrackerDb(db)
+	transferDb := ethdb.NewTransferDb()
+	ownerDb := ethdb.NewOwnerDb()
+	nftDb := ethdb.NewNFTDb()
+
+	return &testDefaultTdhTransfersReceivedActionDeps{
+		db:              db,
+		progressTracker: progressTracker,
+		transferDb:      transferDb,
+		ownerDb:         ownerDb,
+		nftDb:           nftDb,
+		cleanup: func() {
+			_ = db.Close()
+		},
 	}
 }
 
@@ -505,4 +525,97 @@ func TestDefaultTdhTransfersReceivedAction_ClosedDbDuringHandle(t *testing.T) {
 	}
 	err := o.Handle(models.TokenTransferBatch{Transfers: []models.TokenTransfer{transfer}, BlockNumber: 500})
 	assert.Error(t, err, "Should fail because DB is closed mid-handle")
+}
+
+func TestNewTdhTransfersReceivedActionImpl_BeginTxError(t *testing.T) {
+	// Create a sqlmock DB.
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error creating sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Simulate BeginTx error.
+	mock.ExpectBegin().WillReturnError(errors.New("begin tx error"))
+
+	// Call the function.
+	action := NewTdhTransfersReceivedActionImpl(ctx, db, nil, nil, nil, nil)
+	if action != nil {
+		t.Errorf("expected nil action when BeginTx fails, got: %#v", action)
+	}
+
+	// Verify expectations.
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %s", err)
+	}
+}
+
+func TestNewTdhTransfersReceivedActionImpl_CheckpointError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error creating sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Expect BeginTx to succeed.
+	mock.ExpectBegin()
+
+	// Override getLastSavedCheckpoint to simulate an error.
+	origGetCheckpoint := getLastSavedCheckpoint
+	getLastSavedCheckpoint = func(tx *sql.Tx) (uint64, uint64, uint64, error) {
+		return 0, 0, 0, errors.New("checkpoint error")
+	}
+	defer func() { getLastSavedCheckpoint = origGetCheckpoint }()
+
+	// Expect a rollback since checkpoint retrieval fails.
+	mock.ExpectRollback()
+
+	action := NewTdhTransfersReceivedActionImpl(ctx, db, nil, nil, nil, nil)
+	if action != nil {
+		t.Errorf("expected nil action when checkpoint error occurs, got: %#v", action)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %s", err)
+	}
+}
+
+func TestNewTdhTransfersReceivedActionImpl_Success(t *testing.T) {
+	// Create a sqlmock DB.
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error creating sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	// Ensure that the DB used by your dependencies is this sqlmock DB.
+	deps := setupTestDefaultTdhTransfersReceivedActionDepsUsingDB(db)
+	defer deps.cleanup()
+
+	// Set expectation for BeginTx (which is used inside NewTdhTransfersReceivedActionImpl).
+	mock.ExpectBegin()
+
+	origGetCheckpoint := getLastSavedCheckpoint
+	getLastSavedCheckpoint = func(tx *sql.Tx) (uint64, uint64, uint64, error) {
+		return 100, 1, 2, nil
+	}
+	defer func() { getLastSavedCheckpoint = origGetCheckpoint }()
+
+	// Expect commit since there is no error.
+	mock.ExpectCommit()
+
+	// Create the action using the sqlmock DB.
+	action := newDefaultTdhTransfersReceivedAction(t, deps)
+
+	if action == nil {
+		t.Errorf("expected non-nil action on success")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %s", err)
+	}
 }

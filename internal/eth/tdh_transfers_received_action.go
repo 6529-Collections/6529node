@@ -287,7 +287,7 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTr
 	return nil
 }
 
-func getLastSavedCheckpoint(tx *sql.Tx) (uint64, uint64, uint64, error) {
+var getLastSavedCheckpoint = func(tx *sql.Tx) (uint64, uint64, uint64, error) {
 	checkpoint := &ethdb.TokenTransferCheckpoint{}
 	err := tx.QueryRow("SELECT block_number, transaction_index, log_index FROM token_transfers_checkpoint").Scan(&checkpoint.BlockNumber, &checkpoint.TransactionIndex, &checkpoint.LogIndex)
 	if err != nil {
