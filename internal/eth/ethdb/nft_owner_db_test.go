@@ -3,9 +3,12 @@ package ethdb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"regexp"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/6529-Collections/6529node/internal/db/testdb"
 	"github.com/6529-Collections/6529node/pkg/constants"
@@ -992,4 +995,198 @@ func TestOwnerDb_GetBalance_Error_RealDB(t *testing.T) {
 	assert.Equal(t, uint64(0), balance)
 
 	_ = tx.Rollback()
+}
+
+func TestUpdateOwnershipReverse_DeleteError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error creating sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	// Expect transaction begin.
+	mock.ExpectBegin()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("error beginning tx: %v", err)
+	}
+
+	transfer := NFTTransfer{
+		Contract:  "some-contract",
+		TokenID:   "some-token",
+		To:        "receiver",
+		From:      "sender",
+		BlockTime: uint64(time.Now().Unix()),
+		Type:      models.SEND,
+	}
+	tokenUniqueID := uint64(123)
+
+	// Use regexp.QuoteMeta to escape the SQL string.
+	selectSQL := regexp.QuoteMeta("SELECT owner FROM nft_owners WHERE contract = ? AND token_id = ? AND token_unique_id = ?")
+	mock.ExpectQuery(selectSQL).
+		WithArgs(transfer.Contract, transfer.TokenID, tokenUniqueID).
+		WillReturnRows(sqlmock.NewRows([]string{"owner"}).AddRow(transfer.To))
+
+	deleteSQL := regexp.QuoteMeta("DELETE FROM nft_owners WHERE owner = ? AND contract = ? AND token_id = ? AND token_unique_id = ?")
+	mock.ExpectExec(deleteSQL).
+		WithArgs(transfer.To, transfer.Contract, transfer.TokenID, tokenUniqueID).
+		WillReturnError(errors.New("delete error"))
+
+	ownerDbImpl := &OwnerDbImpl{}
+	err = ownerDbImpl.UpdateOwnershipReverse(tx, transfer, tokenUniqueID)
+	if err == nil || err.Error() != "delete error" {
+		t.Errorf("expected delete error, got %v", err)
+	}
+
+	// Expect transaction rollback.
+	mock.ExpectRollback()
+	_ = tx.Rollback()
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestUpdateOwnershipReverse_InsertError(t *testing.T) {
+	// Create a new sqlmock DB.
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error creating sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	// Expect a transaction begin.
+	mock.ExpectBegin()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("error beginning tx: %v", err)
+	}
+
+	// Create a sample transfer that will trigger the INSERT branch.
+	transfer := NFTTransfer{
+		Contract:  "some-contract",
+		TokenID:   "some-token",
+		To:        "receiver",
+		From:      "sender",
+		BlockTime: 1234567890,
+		Type:      "TRANSFER",
+	}
+	tokenUniqueID := uint64(123)
+
+	// Expect the SELECT query for the current owner.
+	selectSQL := regexp.QuoteMeta("SELECT owner FROM nft_owners WHERE contract = ? AND token_id = ? AND token_unique_id = ?")
+	mock.ExpectQuery(selectSQL).
+		WithArgs(transfer.Contract, transfer.TokenID, tokenUniqueID).
+		WillReturnRows(sqlmock.NewRows([]string{"owner"}).AddRow(transfer.To))
+
+	// Expect the DELETE query to succeed.
+	deleteSQL := regexp.QuoteMeta("DELETE FROM nft_owners WHERE owner = ? AND contract = ? AND token_id = ? AND token_unique_id = ?")
+	mock.ExpectExec(deleteSQL).
+		WithArgs(transfer.To, transfer.Contract, transfer.TokenID, tokenUniqueID).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Expect the INSERT query to fail.
+	insertSQL := regexp.QuoteMeta("INSERT INTO nft_owners (owner, contract, token_id, token_unique_id, timestamp) VALUES (?, ?, ?, ?, ?)")
+	mock.ExpectExec(insertSQL).
+		WithArgs(transfer.From, transfer.Contract, transfer.TokenID, tokenUniqueID, transfer.BlockTime).
+		WillReturnError(errors.New("insert error"))
+
+	ownerDbImpl := &OwnerDbImpl{}
+	err = ownerDbImpl.UpdateOwnershipReverse(tx, transfer, tokenUniqueID)
+	if err == nil || err.Error() != "insert error" {
+		t.Errorf("expected insert error, got %v", err)
+	}
+
+	// Expect a rollback.
+	mock.ExpectRollback()
+	_ = tx.Rollback()
+
+	// Verify all expectations were met.
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestGetBalance_QueryError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error creating sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	// Begin transaction
+	mock.ExpectBegin()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("error beginning tx: %v", err)
+	}
+
+	owner := "some-owner"
+	contract := "some-contract"
+	tokenID := "some-token"
+
+	// Prepare expected SQL query with proper escaping.
+	query := regexp.QuoteMeta("SELECT count(*) FROM nft_owners WHERE contract = ? AND token_id = ? AND owner = ?")
+	// Simulate a generic query error.
+	mock.ExpectQuery(query).
+		WithArgs(contract, tokenID, owner).
+		WillReturnError(errors.New("query error"))
+
+	ownerDbImpl := &OwnerDbImpl{}
+	balance, err := ownerDbImpl.GetBalance(tx, owner, contract, tokenID)
+	if err == nil || err.Error() != "query error" {
+		t.Errorf("expected query error, got balance=%d, err=%v", balance, err)
+	}
+
+	// Expect transaction rollback.
+	mock.ExpectRollback()
+	_ = tx.Rollback()
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %s", err)
+	}
+}
+
+func TestGetBalance_NoRows(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error creating sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	// Begin transaction
+	mock.ExpectBegin()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("error beginning tx: %v", err)
+	}
+
+	owner := "some-owner"
+	contract := "some-contract"
+	tokenID := "some-token"
+
+	// Prepare expected SQL query with proper escaping.
+	query := regexp.QuoteMeta("SELECT count(*) FROM nft_owners WHERE contract = ? AND token_id = ? AND owner = ?")
+	// Simulate sql.ErrNoRows.
+	mock.ExpectQuery(query).
+		WithArgs(contract, tokenID, owner).
+		WillReturnError(sql.ErrNoRows)
+
+	ownerDbImpl := &OwnerDbImpl{}
+	balance, err := ownerDbImpl.GetBalance(tx, owner, contract, tokenID)
+	// When no rows, the function should return 0 balance and no error.
+	if err != nil {
+		t.Errorf("expected nil error for no rows, got: %v", err)
+	}
+	if balance != 0 {
+		t.Errorf("expected balance=0 for no rows, got: %d", balance)
+	}
+
+	// Expect transaction rollback.
+	mock.ExpectRollback()
+	_ = tx.Rollback()
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unfulfilled expectations: %s", err)
+	}
 }
