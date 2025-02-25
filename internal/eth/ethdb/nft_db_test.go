@@ -331,15 +331,6 @@ func TestNFTDb_ErrorPropagation(t *testing.T) {
 	}
 }
 
-// =============================
-// NEW forced-error tests below
-// =============================
-
-// TestNFTDb_UpdateSupply_ErrorOnUpsert
-// Demonstrates that ON CONFLICT DO UPDATE won't return a duplicate key error.
-// Instead, it updates. If we want to *force* an error, we can rename the table or
-// cause some other DB-level error. Meanwhile, we show that re-inserting same contract+token
-// just increments supply rather than failing.
 func TestNFTDb_UpdateSupply_ErrorOnUpsert(t *testing.T) {
 	db, nftDB, cleanup := setupTestNFTDb(t)
 	defer cleanup()
@@ -368,8 +359,6 @@ func TestNFTDb_UpdateSupply_ErrorOnUpsert(t *testing.T) {
 	_ = tx2.Rollback()
 }
 
-// TestNFTDb_ForceSqlErrorByRenamingTable
-// Illustrates a forced DB error on an existing NFT. Could test e.g. UpdateBurntSupply, UpdateSupplyReverse, etc.
 func TestNFTDb_ForceSqlErrorByRenamingTable(t *testing.T) {
 	db, nftDB, cleanup := setupTestNFTDb(t)
 	defer cleanup()
@@ -395,4 +384,145 @@ func TestNFTDb_ForceSqlErrorByRenamingTable(t *testing.T) {
 	assert.Error(t, err, "table is missing => forced SQL error")
 
 	_ = tx2.Rollback()
+}
+
+func TestNFTDb_ForceSqlError_UpdateSupply(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
+	defer cleanup()
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	// 1) Insert once successfully
+	supply, err := nftDB.UpdateSupply(tx, "0xErrUpsert", "TokenErrUpsert")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), supply)
+
+	// 2) Now rename the table to break the next query
+	_, err = tx.Exec("ALTER TABLE nfts RENAME TO nfts_broken;")
+	require.NoError(t, err, "Renaming table should succeed in normal SQL usage")
+
+	// 3) Attempt to insert again => forced SQL error
+	_, err = nftDB.UpdateSupply(tx, "0xErrUpsert", "TokenErrUpsert")
+	require.Error(t, err, "We expect an error because 'nfts' no longer exists")
+
+	_ = tx.Rollback()
+}
+
+func TestNFTDb_ForceSqlError_UpdateSupplyReverse(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
+	defer cleanup()
+
+	// Create NFT => supply=1
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = nftDB.UpdateSupply(tx, "0xErrSupplyReverse", "TokenErrSupplyReverse")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	// Now rename the table in a new transaction, then attempt UpdateSupplyReverse
+	tx2, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	_, err = tx2.Exec("ALTER TABLE nfts RENAME TO nfts_gone;")
+	require.NoError(t, err)
+
+	_, err = nftDB.UpdateSupplyReverse(tx2, "0xErrSupplyReverse", "TokenErrSupplyReverse")
+	require.Error(t, err, "Expected error because 'nfts' table is missing")
+
+	_ = tx2.Rollback()
+}
+
+func TestNFTDb_ForceSqlError_UpdateBurntSupply(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
+	defer cleanup()
+
+	// Create NFT => supply=1
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = nftDB.UpdateSupply(tx, "0xErrBurn", "TokenErrBurn")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	// Now rename table => then attempt burn => forced error
+	tx2, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	_, err = tx2.Exec(`ALTER TABLE nfts RENAME TO nfts_broken;`)
+	require.NoError(t, err)
+
+	err = nftDB.UpdateBurntSupply(tx2, "0xErrBurn", "TokenErrBurn")
+	require.Error(t, err, "Expected error: table is missing")
+
+	_ = tx2.Rollback()
+}
+
+func TestNFTDb_ForceSqlError_UpdateBurntSupplyReverse(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
+	defer cleanup()
+
+	// create NFT => burn => burnt_supply=1
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = nftDB.UpdateSupply(tx, "0xErrBurnReverse", "TokenErrBurnReverse")
+	require.NoError(t, err)
+	err = nftDB.UpdateBurntSupply(tx, "0xErrBurnReverse", "TokenErrBurnReverse")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	// rename => revert => error
+	tx2, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	_, err = tx2.Exec(`ALTER TABLE nfts RENAME TO nfts_missing;`)
+	require.NoError(t, err)
+
+	err = nftDB.UpdateBurntSupplyReverse(tx2, "0xErrBurnReverse", "TokenErrBurnReverse")
+	require.Error(t, err, "Expected forced SQL error")
+
+	_ = tx2.Rollback()
+}
+
+func TestNFTDb_ForceSqlError_GetNft(t *testing.T) {
+	db, nftDB, cleanup := setupTestNFTDb(t)
+	defer cleanup()
+
+	// create NFT => supply=2
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = nftDB.UpdateSupply(tx, "0xErrGetNft", "TokenErrGetNft")
+	require.NoError(t, err)
+	_, err = nftDB.UpdateSupply(tx, "0xErrGetNft", "TokenErrGetNft")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	// rename => attempt GetNft => error
+	tx2, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	_, err = tx2.Exec(`ALTER TABLE nfts RENAME TO nfts_notfound;`)
+	require.NoError(t, err)
+
+	_, err = nftDB.GetNft(tx2, "0xErrGetNft", "TokenErrGetNft")
+	require.Error(t, err, "Expected error on forced DB fail")
+
+	_ = tx2.Rollback()
+}
+
+func TestNFTDb_NilTransaction(t *testing.T) {
+	_, nftDB, cleanup := setupTestNFTDb(t)
+	defer cleanup()
+
+	// All these calls should fail/panic if the code doesn't guard against nil Tx.
+	// Usually the database/sql calls will panic or produce an invalid memory address error.
+	// You can decide how your code should handle nil Tx if at all.
+	defer func() {
+		// Recover from a potential panic to ensure test does not crash the suite.
+		if r := recover(); r != nil {
+			t.Logf("Recovered from panic as expected: %v", r)
+		}
+	}()
+
+	_, err := nftDB.UpdateSupply(nil, "0xNilTx", "TokenNilTx")
+	require.Error(t, err, "Expected error or panic with nil Tx")
 }
