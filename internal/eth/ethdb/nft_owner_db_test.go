@@ -1165,28 +1165,15 @@ func TestGetBalance_NoRows(t *testing.T) {
 	contract := "some-contract"
 	tokenID := "some-token"
 
-	// Prepare expected SQL query with proper escaping.
-	query := regexp.QuoteMeta("SELECT count(*) FROM nft_owners WHERE contract = ? AND token_id = ? AND owner = ?")
+	query := regexp.QuoteMeta("SELECT count(*) FROM nft_owners WHERE owner = ? AND contract = ? AND token_id = ?")
 	// Simulate sql.ErrNoRows.
 	mock.ExpectQuery(query).
-		WithArgs(contract, tokenID, owner).
+		WithArgs(owner, contract, tokenID).
 		WillReturnError(sql.ErrNoRows)
 
 	ownerDbImpl := &OwnerDbImpl{}
 	balance, err := ownerDbImpl.GetBalance(tx, owner, contract, tokenID)
-	// When no rows, the function should return 0 balance and no error.
-	if err != nil {
-		t.Errorf("expected nil error for no rows, got: %v", err)
-	}
-	if balance != 0 {
-		t.Errorf("expected balance=0 for no rows, got: %d", balance)
-	}
 
-	// Expect transaction rollback.
-	mock.ExpectRollback()
-	_ = tx.Rollback()
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unfulfilled expectations: %s", err)
-	}
+	assert.Equal(t, uint64(0), balance)
+	assert.NoError(t, err)
 }

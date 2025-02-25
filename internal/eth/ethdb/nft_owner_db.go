@@ -99,7 +99,7 @@ func (o *OwnerDbImpl) UpdateOwnershipReverse(tx *sql.Tx, transfer NFTTransfer, t
 // GetBalance retrieves the balance of an owner for a specific NFT.
 func (o *OwnerDbImpl) GetBalance(tx *sql.Tx, owner, contract, tokenID string) (uint64, error) {
 	var balance uint64
-	err := tx.QueryRow("SELECT count(*) FROM nft_owners WHERE contract = ? AND token_id = ? AND owner = ?", contract, tokenID, owner).Scan(&balance)
+	err := tx.QueryRow("SELECT count(*) FROM nft_owners WHERE owner = ? AND contract = ? AND token_id = ?", owner, contract, tokenID).Scan(&balance)
 
 	if err == sql.ErrNoRows {
 		return 0, nil // Owner has no balance for this NFT
