@@ -230,10 +230,12 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTr
 				}
 			}
 
+			lastChunkTransfer := chunk[len(chunk)-1]
+
 			zap.L().Debug("Batch processed",
 				zap.String("batch", fmt.Sprintf("%d/%d", batchIndex+1, numBatches)),
 				zap.Int("batchSize", len(chunk)),
-				zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex)),
+				zap.String("lastTransfer", fmt.Sprintf("%d:%d:%d", lastChunkTransfer.BlockNumber, lastChunkTransfer.TransactionIndex, lastChunkTransfer.LogIndex)),
 			)
 		}
 
