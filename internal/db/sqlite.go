@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"fmt"
@@ -33,6 +34,7 @@ func OpenSqlite(path string) (*sql.DB, error) {
 		PRAGMA synchronous = NORMAL;
 		PRAGMA cache_size = -2000;
 		PRAGMA busy_timeout = 5000;
+		PRAGMA foreign_keys = ON;
 	`)
 	if err != nil {
 		if err := db.Close(); err != nil {
@@ -86,4 +88,34 @@ func migrateDatabase(db *sql.DB) error {
 	}
 
 	return nil
+}
+
+type RowQuerier interface {
+	QueryRow(query string, args ...interface{}) *sql.Row
+}
+
+func TxRunner[T any](ctx context.Context, db *sql.DB, fn func(*sql.Tx) (T, error)) (result T, err error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return result, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	defer func() {
+		if err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil {
+				zap.L().Error("failed to rollback transaction", zap.Error(rbErr))
+			}
+		} else {
+			if cmErr := tx.Commit(); cmErr != nil {
+				zap.L().Error("failed to commit transaction", zap.Error(cmErr))
+				err = fmt.Errorf("failed to commit transaction: %w", cmErr)
+			}
+		}
+	}()
+
+	result, err = fn(tx)
+	if err != nil {
+		return result, fmt.Errorf("failed to execute transaction: %w", err)
+	}
+	return result, nil
 }

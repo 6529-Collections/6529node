@@ -5,7 +5,8 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/6529-Collections/6529node/pkg/tdh/tokens"
+	"github.com/6529-Collections/6529node/pkg/constants"
+	"github.com/6529-Collections/6529node/pkg/tdh/models"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/stretchr/testify/assert"
@@ -32,7 +33,7 @@ func addressToTopic(addr common.Address) common.Hash {
 
 func TestDefaultSalesDetector(t *testing.T) {
 	testTxHash := common.HexToHash("0xABC")
-	nftTransfers := []tokens.TokenTransfer{{
+	nftTransfers := []models.TokenTransfer{{
 		BlockNumber: 12345,
 		TxHash:      "0xABC",
 		From:        "0xSeller",
@@ -52,7 +53,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 
 		results, err := detector.DetectIfSale(context.Background(), testTxHash, nftTransfers)
 		require.NoError(t, err)
-		assert.Equal(t, tokens.SEND, results[0])
+		assert.Equal(t, models.SEND, results[0])
 
 		mockClient.AssertExpectations(t)
 	})
@@ -75,7 +76,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 
 		results, err := detector.DetectIfSale(context.Background(), testTxHash, nftTransfers)
 		require.NoError(t, err)
-		assert.Equal(t, tokens.SALE, results[0])
+		assert.Equal(t, models.SALE, results[0])
 
 		mockClient.AssertExpectations(t)
 	})
@@ -104,7 +105,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 
 		results, err := detector.DetectIfSale(context.Background(), testTxHash, nftTransfers)
 		require.NoError(t, err)
-		assert.Equal(t, tokens.SALE, results[0])
+		assert.Equal(t, models.SALE, results[0])
 
 		mockClient.AssertExpectations(t)
 	})
@@ -173,7 +174,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 
 		results, err := detector.DetectIfSale(context.Background(), testTxHash, nftTransfers)
 		require.NoError(t, err)
-		assert.Equal(t, tokens.SALE, results[0])
+		assert.Equal(t, models.SALE, results[0])
 
 		mockClient.AssertExpectations(t)
 	})
@@ -209,7 +210,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 
 		results, err := detector.DetectIfSale(context.Background(), testTxHash, nftTransfers)
 		require.NoError(t, err)
-		assert.Equal(t, tokens.SALE, results[0])
+		assert.Equal(t, models.SALE, results[0])
 
 		mockClient.AssertExpectations(t)
 	})
@@ -233,7 +234,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 
 		results, err := detector.DetectIfSale(context.Background(), testTxHash, nftTransfers)
 		require.NoError(t, err)
-		assert.Equal(t, tokens.SEND, results[0])
+		assert.Equal(t, models.SEND, results[0])
 
 		mockClient.AssertExpectations(t)
 	})
@@ -242,8 +243,8 @@ func TestDefaultSalesDetector(t *testing.T) {
 		mockClient := new(mocks.EthClient)
 		detector := NewDefaultSalesDetector(mockClient)
 
-		mintTransfers := []tokens.TokenTransfer{{
-			From:     "0x0000000000000000000000000000000000000000",
+		mintTransfers := []models.TokenTransfer{{
+			From:     constants.NULL_ADDRESS,
 			To:       "0xSomeUser",
 			Contract: "0xSomeNft",
 			TokenID:  "123",
@@ -263,7 +264,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 
 		results, err := detector.DetectIfSale(context.Background(), testTxHash, mintTransfers)
 		require.NoError(t, err)
-		assert.Equal(t, tokens.AIRDROP, results[0], "MINT + no sale => AIRDROP")
+		assert.Equal(t, models.AIRDROP, results[0], "MINT + no sale => AIRDROP")
 
 		mockClient.AssertExpectations(t)
 	})
@@ -272,8 +273,8 @@ func TestDefaultSalesDetector(t *testing.T) {
 		mockClient := new(mocks.EthClient)
 		detector := NewDefaultSalesDetector(mockClient)
 
-		mintTransfers := []tokens.TokenTransfer{{
-			From:     "0x0000000000000000000000000000000000000000",
+		mintTransfers := []models.TokenTransfer{{
+			From:     constants.NULL_ADDRESS,
 			To:       "0xSomeUser",
 			Contract: "0xSomeNft",
 			TokenID:  "999",
@@ -293,7 +294,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 
 		results, err := detector.DetectIfSale(context.Background(), testTxHash, mintTransfers)
 		require.NoError(t, err)
-		assert.Equal(t, tokens.MINT, results[0], "Paid mint remains MINT")
+		assert.Equal(t, models.MINT, results[0], "Paid mint remains MINT")
 
 		mockClient.AssertExpectations(t)
 	})
@@ -302,9 +303,9 @@ func TestDefaultSalesDetector(t *testing.T) {
 		mockClient := new(mocks.EthClient)
 		detector := NewDefaultSalesDetector(mockClient)
 
-		burnTransfers := []tokens.TokenTransfer{{
+		burnTransfers := []models.TokenTransfer{{
 			From:     "0xSomeUser",
-			To:       "0x0000000000000000000000000000000000000000",
+			To:       constants.DEAD_ADDRESS,
 			Contract: "0xSomeNft",
 			TokenID:  "77",
 		}}
@@ -323,7 +324,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 
 		results, err := detector.DetectIfSale(context.Background(), testTxHash, burnTransfers)
 		require.NoError(t, err)
-		assert.Equal(t, tokens.BURN, results[0], "Burn + no sale => still BURN")
+		assert.Equal(t, models.BURN, results[0], "Burn + no sale => still BURN")
 
 		mockClient.AssertExpectations(t)
 	})
@@ -332,9 +333,9 @@ func TestDefaultSalesDetector(t *testing.T) {
 		mockClient := new(mocks.EthClient)
 		detector := NewDefaultSalesDetector(mockClient)
 
-		burnTransfers := []tokens.TokenTransfer{{
+		burnTransfers := []models.TokenTransfer{{
 			From:     "0xSomeUser",
-			To:       "0x0000000000000000000000000000000000000000",
+			To:       constants.NULL_ADDRESS,
 			Contract: "0xSomeNft",
 			TokenID:  "12",
 		}}
@@ -353,7 +354,7 @@ func TestDefaultSalesDetector(t *testing.T) {
 
 		results, err := detector.DetectIfSale(context.Background(), testTxHash, burnTransfers)
 		require.NoError(t, err)
-		assert.Equal(t, tokens.BURN, results[0], "Burn remains BURN even if a sale is indicated")
+		assert.Equal(t, models.BURN, results[0], "Burn remains BURN even if a sale is indicated")
 
 		mockClient.AssertExpectations(t)
 	})
