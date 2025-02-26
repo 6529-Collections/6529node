@@ -204,6 +204,7 @@ func TestTransferDb_DeleteTransfer_Basic(t *testing.T) {
 		{BlockNumber: 100, TransactionIndex: 1, LogIndex: 5, TxHash: "0xMid2", From: "A3", To: "B3", Contract: "C3", TokenID: "3", Type: "SALE"},
 		{BlockNumber: 101, TransactionIndex: 0, LogIndex: 0, TxHash: "0xNew1", From: "A4", To: "B4", Contract: "C4", TokenID: "4", Type: "SEND"},
 		{BlockNumber: 101, TransactionIndex: 2, LogIndex: 0, TxHash: "0xNew2", From: "A5", To: "B5", Contract: "C5", TokenID: "5", Type: "MINT"},
+		{BlockNumber: 101, TransactionIndex: 2, LogIndex: 1, TxHash: "0xNew3", From: "A6", To: "B6", Contract: "C6", TokenID: "6", Type: "SEND"},
 	}
 
 	tx, err := db.BeginTx(context.Background(), nil)
