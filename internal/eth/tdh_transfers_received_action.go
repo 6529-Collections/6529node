@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/6529-Collections/6529node/internal/db"
 	"github.com/6529-Collections/6529node/internal/eth/ethdb"
 	"github.com/6529-Collections/6529node/pkg/tdh/models"
 	"go.uber.org/zap"
@@ -26,25 +27,7 @@ type DefaultTdhTransfersReceivedAction struct {
 }
 
 func NewTdhTransfersReceivedActionImpl(ctx context.Context, db *sql.DB, transferDb ethdb.TransferDb, ownerDb ethdb.OwnerDb, nftDb ethdb.NFTDb, progressTracker ethdb.TdhIdxTrackerDb) *DefaultTdhTransfersReceivedAction {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		zap.L().Error("Failed to begin transaction", zap.Error(err))
-		return nil
-	}
-
-	defer func() {
-		if err != nil {
-			if rbErr := tx.Rollback(); rbErr != nil {
-				zap.L().Error("Transaction rollback error", zap.Error(rbErr))
-			}
-		} else {
-			if cmErr := tx.Commit(); cmErr != nil {
-				zap.L().Error("Transaction commit error", zap.Error(cmErr))
-			}
-		}
-	}()
-
-	lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex, err := getLastSavedCheckpoint(tx)
+	lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex, err := getLastSavedCheckpoint(db)
 	if err != nil {
 		zap.L().Error("Failed to get last saved checkpoint", zap.Error(err))
 		return nil
@@ -84,7 +67,7 @@ func (a *DefaultTdhTransfersReceivedAction) applyTransfer(
 			}
 			uniqueID, getUniqueIDErr := a.ownerDb.GetUniqueID(txn, transfer.Contract, transfer.TokenID, transfer.From)
 			if getUniqueIDErr != nil {
-				return fmt.Errorf("failed to get NFT unique ID: %w", getUniqueIDErr)
+				return fmt.Errorf("failed to get NFT unique ID FROM owner %s for token %s:%s: %w", transfer.From, transfer.Contract, transfer.TokenID, getUniqueIDErr)
 			}
 			tokenUniqueID = uniqueID
 		}
@@ -110,7 +93,7 @@ func (a *DefaultTdhTransfersReceivedAction) applyTransferReverse(
 	// 0) Get the NFT unique ID
 	tokenUniqueID, getUniqueIDErr := a.ownerDb.GetUniqueID(txn, transfer.Contract, transfer.TokenID, transfer.To)
 	if getUniqueIDErr != nil {
-		return fmt.Errorf("failed to get NFT unique ID: %w", getUniqueIDErr)
+		return fmt.Errorf("failed to get NFT unique ID TO owner %s for token %s:%s: %w", transfer.To, transfer.Contract, transfer.TokenID, getUniqueIDErr)
 	}
 
 	// 1) If it was a burn forward, revert burnt supply
@@ -208,76 +191,71 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTr
 		return nil
 	}
 
-	tx, err := a.db.BeginTx(a.ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
+	// Run the transactional work using the generic DoInTx helper.
+	_, err := db.DoInTx(a.ctx, a.db, func(tx *sql.Tx) (struct{}, error) {
+		numBatches := (numTransfers + batchSize - 1) / batchSize // integer ceil
 
-	numBatches := (numTransfers + batchSize - 1) / batchSize // integer ceil
+		for batchIndex := 0; batchIndex < numBatches; batchIndex++ {
+			start := batchIndex * batchSize
+			end := start + batchSize
+			if end > numTransfers {
+				end = numTransfers
+			}
+			chunk := transfersBatch.Transfers[start:end]
 
-	for batchIndex := 0; batchIndex < numBatches; batchIndex++ {
-		start := batchIndex * batchSize
-		end := start + batchSize
-		if end > numTransfers {
-			end = numTransfers
-		}
-		chunk := transfersBatch.Transfers[start:end]
+			firstTransfer := chunk[0]
+			lastTransfer := chunk[len(chunk)-1]
 
-		firstTransfer := chunk[0]
-		lastTransfer := chunk[len(chunk)-1]
-
-		lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex, err := getLastSavedCheckpoint(tx)
-		if err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("failed to get last saved checkpoint: %w", err)
-		}
-
-		// If new data is behind (or same logIndex) => reset needed
-		if lastSavedBlock > firstTransfer.BlockNumber ||
-			(lastSavedBlock == firstTransfer.BlockNumber && lastSavedTxIndex > firstTransfer.TransactionIndex) ||
-			(lastSavedBlock == firstTransfer.BlockNumber && lastSavedTxIndex == firstTransfer.TransactionIndex && lastSavedLogIndex >= firstTransfer.LogIndex) {
-			zap.L().Warn("Checkpoint error: reset needed",
-				zap.String("lastCheckpoint", fmt.Sprintf("%d:%d:%d", lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex)),
-				zap.String("firstTransfer", fmt.Sprintf("%d:%d:%d", firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex)),
-			)
-			zap.L().Warn("Resetting due to checkpoint mismatch")
-			err = a.reset(tx, firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex)
+			lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex, err := getLastSavedCheckpoint(tx)
 			if err != nil {
-				_ = tx.Rollback()
-				return err
+				return struct{}{}, fmt.Errorf("failed to get last saved checkpoint: %w", err)
+			}
+
+			// If new data is behind (or same logIndex) => reset needed.
+			if lastSavedBlock > firstTransfer.BlockNumber ||
+				(lastSavedBlock == firstTransfer.BlockNumber && lastSavedTxIndex > firstTransfer.TransactionIndex) ||
+				(lastSavedBlock == firstTransfer.BlockNumber && lastSavedTxIndex == firstTransfer.TransactionIndex && lastSavedLogIndex >= firstTransfer.LogIndex) {
+				zap.L().Warn("Checkpoint error: reset needed",
+					zap.String("lastCheckpoint", fmt.Sprintf("%d:%d:%d", lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex)),
+					zap.String("firstTransfer", fmt.Sprintf("%d:%d:%d", firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex)),
+				)
+				zap.L().Warn("Resetting due to checkpoint mismatch")
+				if err := a.reset(tx, firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex); err != nil {
+					return struct{}{}, err
+				}
+			}
+
+			for _, t := range chunk {
+				if err := a.applyTransfer(tx, t); err != nil {
+					return struct{}{}, err
+				}
+			}
+
+			if err := updateCheckpoint(tx, lastTransfer.BlockNumber, lastTransfer.TransactionIndex, lastTransfer.LogIndex); err != nil {
+				return struct{}{}, err
+			}
+
+			zap.L().Info("Checkpoint saved", zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastTransfer.BlockNumber, lastTransfer.TransactionIndex, lastTransfer.LogIndex)))
+
+			// Log batch details.
+			if len(transfersBatch.Transfers) > 0 {
+				zap.L().Debug("Batch processed",
+					zap.String("batch", fmt.Sprintf("%d/%d", batchIndex+1, numBatches)),
+					zap.Int("batchSize", len(chunk)),
+					zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex)),
+				)
+			} else {
+				zap.L().Debug("Checkpoint saved",
+					zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex)),
+				)
 			}
 		}
 
-		for _, t := range chunk {
-			if err := a.applyTransfer(tx, t); err != nil {
-				_ = tx.Rollback()
-				return err
-			}
-		}
+		return struct{}{}, nil
+	})
 
-		err = updateCheckpoint(tx, lastTransfer.BlockNumber, lastTransfer.TransactionIndex, lastTransfer.LogIndex)
-		if err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-
-		zap.L().Info("Checkpoint saved", zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastTransfer.BlockNumber, lastTransfer.TransactionIndex, lastTransfer.LogIndex)))
-
-		if len(transfersBatch.Transfers) > 0 {
-			zap.L().Debug("Batch processed",
-				zap.String("batch", fmt.Sprintf("%d/%d", batchIndex+1, numBatches)),
-				zap.Int("batchSize", len(chunk)),
-				zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex)),
-			)
-		} else {
-			zap.L().Debug("Checkpoint saved",
-				zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex)),
-			)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
+	if err != nil {
+		return err
 	}
 
 	if err := a.progressTracker.SetProgress(transfersBatch.BlockNumber, a.ctx); err != nil {
@@ -287,9 +265,9 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTr
 	return nil
 }
 
-var getLastSavedCheckpoint = func(tx *sql.Tx) (uint64, uint64, uint64, error) {
+var getLastSavedCheckpoint = func(q db.RowQuerier) (uint64, uint64, uint64, error) {
 	checkpoint := &ethdb.TokenTransferCheckpoint{}
-	err := tx.QueryRow("SELECT block_number, transaction_index, log_index FROM token_transfers_checkpoint").Scan(&checkpoint.BlockNumber, &checkpoint.TransactionIndex, &checkpoint.LogIndex)
+	err := q.QueryRow("SELECT block_number, transaction_index, log_index FROM token_transfers_checkpoint").Scan(&checkpoint.BlockNumber, &checkpoint.TransactionIndex, &checkpoint.LogIndex)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, 0, 0, nil

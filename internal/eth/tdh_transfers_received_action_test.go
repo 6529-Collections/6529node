@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/6529-Collections/6529node/internal/db"
 	"github.com/6529-Collections/6529node/internal/db/testdb"
 	"github.com/6529-Collections/6529node/internal/eth/ethdb"
 	"github.com/6529-Collections/6529node/internal/eth/mocks"
@@ -163,7 +164,7 @@ func newActionWithMocks(
 	require.NoError(t, err, "Should open an in-memory DB for the test")
 
 	originalGetLastSavedCheckpoint := getLastSavedCheckpoint
-	getLastSavedCheckpoint = func(tx *sql.Tx) (uint64, uint64, uint64, error) {
+	getLastSavedCheckpoint = func(q db.RowQuerier) (uint64, uint64, uint64, error) {
 		return 0, 0, 0, nil
 	}
 
@@ -584,54 +585,23 @@ func TestDefaultTdhTransfersReceivedAction_ClosedDbDuringHandle(t *testing.T) {
 	assert.Error(t, err, "Should fail because DB is closed mid-handle")
 }
 
-func TestNewTdhTransfersReceivedActionImpl_BeginTxError(t *testing.T) {
-	// Create a sqlmock DB.
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("error creating sqlmock: %v", err)
-	}
-	defer db.Close()
-
-	ctx := context.Background()
-
-	// Simulate BeginTx error.
-	mock.ExpectBegin().WillReturnError(errors.New("begin tx error"))
-
-	// Call the function.
-	action := NewTdhTransfersReceivedActionImpl(ctx, db, nil, nil, nil, nil)
-	if action != nil {
-		t.Errorf("expected nil action when BeginTx fails, got: %#v", action)
-	}
-
-	// Verify expectations.
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unfulfilled expectations: %s", err)
-	}
-}
-
 func TestNewTdhTransfersReceivedActionImpl_CheckpointError(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mockDb, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("error creating sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mockDb.Close()
 
 	ctx := context.Background()
-
-	// Expect BeginTx to succeed.
-	mock.ExpectBegin()
 
 	// Override getLastSavedCheckpoint to simulate an error.
 	origGetCheckpoint := getLastSavedCheckpoint
-	getLastSavedCheckpoint = func(tx *sql.Tx) (uint64, uint64, uint64, error) {
+	getLastSavedCheckpoint = func(q db.RowQuerier) (uint64, uint64, uint64, error) {
 		return 0, 0, 0, errors.New("checkpoint error")
 	}
 	defer func() { getLastSavedCheckpoint = origGetCheckpoint }()
 
-	// Expect a rollback since checkpoint retrieval fails.
-	mock.ExpectRollback()
-
-	action := NewTdhTransfersReceivedActionImpl(ctx, db, nil, nil, nil, nil)
+	action := NewTdhTransfersReceivedActionImpl(ctx, mockDb, nil, nil, nil, nil)
 	if action != nil {
 		t.Errorf("expected nil action when checkpoint error occurs, got: %#v", action)
 	}
@@ -643,27 +613,21 @@ func TestNewTdhTransfersReceivedActionImpl_CheckpointError(t *testing.T) {
 
 func TestNewTdhTransfersReceivedActionImpl_Success(t *testing.T) {
 	// Create a sqlmock DB.
-	db, mock, err := sqlmock.New()
+	mockDb, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("error creating sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mockDb.Close()
 
 	// Ensure that the DB used by your dependencies is this sqlmock DB.
-	deps := setupTestDefaultTdhTransfersReceivedActionDepsUsingDB(db)
+	deps := setupTestDefaultTdhTransfersReceivedActionDepsUsingDB(mockDb)
 	defer deps.cleanup()
 
-	// Set expectation for BeginTx (which is used inside NewTdhTransfersReceivedActionImpl).
-	mock.ExpectBegin()
-
 	origGetCheckpoint := getLastSavedCheckpoint
-	getLastSavedCheckpoint = func(tx *sql.Tx) (uint64, uint64, uint64, error) {
+	getLastSavedCheckpoint = func(q db.RowQuerier) (uint64, uint64, uint64, error) {
 		return 100, 1, 2, nil
 	}
 	defer func() { getLastSavedCheckpoint = origGetCheckpoint }()
-
-	// Expect commit since there is no error.
-	mock.ExpectCommit()
 
 	// Create the action using the sqlmock DB.
 	action := newDefaultTdhTransfersReceivedAction(t, deps)
@@ -1199,7 +1163,7 @@ func TestDefaultTdhTransfersReceivedAction_Handle_ErrorGetLastSavedCheckpoint(t 
 
 	// We'll override getLastSavedCheckpoint to return an error:
 	origGetLastSavedCheckpoint := getLastSavedCheckpoint
-	getLastSavedCheckpoint = func(tx *sql.Tx) (uint64, uint64, uint64, error) {
+	getLastSavedCheckpoint = func(q db.RowQuerier) (uint64, uint64, uint64, error) {
 		return 0, 0, 0, errors.New("forced checkpoint error")
 	}
 	defer func() { getLastSavedCheckpoint = origGetLastSavedCheckpoint }()
@@ -1229,7 +1193,7 @@ func TestDefaultTdhTransfersReceivedAction_Handle_ErrorFromReset(t *testing.T) {
 	// We'll force a mismatch so that reset is called. Then inside reset, we force an error.
 	// Suppose the last saved checkpoint is block=200. We'll override getLastSavedCheckpoint:
 	origGetLastSavedCheckpoint := getLastSavedCheckpoint
-	getLastSavedCheckpoint = func(tx *sql.Tx) (uint64, uint64, uint64, error) {
+	getLastSavedCheckpoint = func(q db.RowQuerier) (uint64, uint64, uint64, error) {
 		return 200, 0, 0, nil
 	}
 	defer func() { getLastSavedCheckpoint = origGetLastSavedCheckpoint }()
