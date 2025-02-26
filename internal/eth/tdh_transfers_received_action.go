@@ -52,7 +52,15 @@ func (a *DefaultTdhTransfersReceivedAction) applyTransfer(
 	for i := int64(0); i < transfer.Amount; i++ {
 		var tokenUniqueID uint64
 
-		// 1) Update NFT supplies
+		// 1) if it's a burn, update the burnt supply
+		if transfer.Type == models.BURN {
+			if updateBurntSupplyErr := a.nftDb.UpdateBurntSupply(txn, transfer.Contract, transfer.TokenID); updateBurntSupplyErr != nil {
+				return fmt.Errorf("failed to update NFT burnt supply: %w", updateBurntSupplyErr)
+			}
+		}
+
+		// 2) If it's a mint or airdrop, update the supply and get the unique ID,
+		// otherwise get the unique ID from the owner
 		if transfer.Type == models.MINT || transfer.Type == models.AIRDROP {
 			newSupply, updateSupplyErr := a.nftDb.UpdateSupply(txn, transfer.Contract, transfer.TokenID)
 			if updateSupplyErr != nil {
@@ -60,11 +68,6 @@ func (a *DefaultTdhTransfersReceivedAction) applyTransfer(
 			}
 			tokenUniqueID = newSupply
 		} else {
-			if transfer.Type == models.BURN {
-				if updateBurntSupplyErr := a.nftDb.UpdateBurntSupply(txn, transfer.Contract, transfer.TokenID); updateBurntSupplyErr != nil {
-					return fmt.Errorf("failed to update NFT burnt supply: %w", updateBurntSupplyErr)
-				}
-			}
 			uniqueID, getUniqueIDErr := a.ownerDb.GetUniqueID(txn, transfer.Contract, transfer.TokenID, transfer.From)
 			if getUniqueIDErr != nil {
 				return fmt.Errorf("failed to get NFT unique ID FROM owner %s for token %s:%s: %w", transfer.From, transfer.Contract, transfer.TokenID, getUniqueIDErr)
@@ -72,12 +75,12 @@ func (a *DefaultTdhTransfersReceivedAction) applyTransfer(
 			tokenUniqueID = uniqueID
 		}
 
-		// 2) Store the transfer
+		// 3) Store the transfer
 		if storeTrfErr := a.transferDb.StoreTransfer(txn, transfer, tokenUniqueID); storeTrfErr != nil {
 			return fmt.Errorf("failed to store transfer: %w", storeTrfErr)
 		}
 
-		// 3) Update ownership
+		// 4) Update ownership
 		if updateOwnershipErr := a.ownerDb.UpdateOwnership(txn, transfer, tokenUniqueID); updateOwnershipErr != nil {
 			return fmt.Errorf("failed to update ownership: %w", updateOwnershipErr)
 		}
@@ -113,6 +116,11 @@ func (a *DefaultTdhTransfersReceivedAction) applyTransferReverse(
 	// 3) Revert ownership
 	if updateOwnershipErr := a.ownerDb.UpdateOwnershipReverse(txn, transfer, tokenUniqueID); updateOwnershipErr != nil {
 		return fmt.Errorf("failed to revert ownership: %w", updateOwnershipErr)
+	}
+
+	// 4) Delete the transfer
+	if deleteTransferErr := a.transferDb.DeleteTransfer(txn, transfer, tokenUniqueID); deleteTransferErr != nil {
+		return fmt.Errorf("failed to delete transfer: %w", deleteTransferErr)
 	}
 
 	return nil
@@ -154,13 +162,7 @@ func (a *DefaultTdhTransfersReceivedAction) reset(
 		}
 	}
 
-	// 4) Delete from TransferDb
-	err = a.transferDb.DeleteTransfersAfterCheckpoint(tx, blockNumber, txIndex, logIndex)
-	if err != nil {
-		return fmt.Errorf("failed to delete transfers after checkpoint: %w", err)
-	}
-
-	// 5) Finally update the checkpoint in the same transaction
+	// 4) Finally update the checkpoint in the same transaction
 	latestTransfer, err := a.transferDb.GetLatestTransfer(tx)
 	if err != nil {
 		return fmt.Errorf("failed to get latest transfer: %w", err)

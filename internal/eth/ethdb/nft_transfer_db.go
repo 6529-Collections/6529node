@@ -10,7 +10,7 @@ import (
 type TransferDb interface {
 	StoreTransfer(tx *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error
 	GetTransfersAfterCheckpoint(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]NFTTransfer, error)
-	DeleteTransfersAfterCheckpoint(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error
+	DeleteTransfer(tx *sql.Tx, transfer NFTTransfer, tokenUniqueID uint64) error
 	GetLatestTransfer(tx *sql.Tx) (*NFTTransfer, error)
 }
 
@@ -22,7 +22,6 @@ func NewTransferDb() TransferDb {
 // TransferDbImpl implements TransferDb.
 type TransferDbImpl struct{}
 
-// StoreTransfer inserts a new transfer into the database.
 func (t *TransferDbImpl) StoreTransfer(tx *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error {
 	_, err := tx.Exec(`
 		INSERT INTO nft_transfers (
@@ -32,6 +31,14 @@ func (t *TransferDbImpl) StoreTransfer(tx *sql.Tx, transfer models.TokenTransfer
 		transfer.BlockNumber, transfer.TransactionIndex, transfer.LogIndex, transfer.TxHash,
 		transfer.EventName, transfer.From, transfer.To, transfer.Contract,
 		transfer.TokenID, tokenUniqueID, transfer.BlockTime, transfer.Type)
+	return err
+}
+
+func (t *TransferDbImpl) DeleteTransfer(tx *sql.Tx, transfer NFTTransfer, tokenUniqueID uint64) error {
+	_, err := tx.Exec(`
+		DELETE FROM nft_transfers
+		WHERE tx_hash = ? AND log_index = ? AND from_address = ? AND to_address = ? AND contract = ? AND token_id = ? AND token_unique_id = ?`,
+		transfer.TxHash, transfer.LogIndex, transfer.From, transfer.To, transfer.Contract, transfer.TokenID, tokenUniqueID)
 	return err
 }
 
@@ -51,16 +58,6 @@ func (t *TransferDbImpl) GetTransfersAfterCheckpoint(tx *sql.Tx, blockNumber, tx
 	defer rows.Close()
 
 	return scanTransfers(rows)
-}
-
-// DeleteTransfersAfterCheckpoint deletes all transfers after a specific checkpoint.
-func (t *TransferDbImpl) DeleteTransfersAfterCheckpoint(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) error {
-	_, err := tx.Exec(`
-		DELETE FROM nft_transfers
-		WHERE block_number > ? OR (block_number = ? AND transaction_index > ?) 
-			OR (block_number = ? AND transaction_index = ? AND log_index >= ?)`,
-		blockNumber, blockNumber, txIndex, blockNumber, txIndex, logIndex)
-	return err
 }
 
 // GetLatestTransfer retrieves the most recent transfer.

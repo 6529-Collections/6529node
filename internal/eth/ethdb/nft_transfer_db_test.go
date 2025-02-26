@@ -193,7 +193,7 @@ func TestTransferDb_GetTransfersAfterCheckpoint_Basic(t *testing.T) {
 	assert.True(t, foundHash3 && foundHash4 && foundHash5, "Should find those 3 hashes in results")
 }
 
-func TestTransferDb_DeleteTransfersAfterCheckpoint_Basic(t *testing.T) {
+func TestTransferDb_DeleteTransfer_Basic(t *testing.T) {
 	db, transferDb, cleanup := setupTestTransferDb(t)
 	defer cleanup()
 
@@ -214,17 +214,17 @@ func TestTransferDb_DeleteTransfersAfterCheckpoint_Basic(t *testing.T) {
 	}
 	require.NoError(t, tx.Commit())
 
-	// Now delete anything strictly after block=100, OR (block=100, txIndex>1), OR (block=100, txIndex=1, logIndex >= something)
-	// We'll do the same condition from your code:
-	checkBlock := uint64(100)
-	checkTxIndex := uint64(1)
-	checkLogIndex := uint64(0)
-
 	txDel, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
 
-	err = transferDb.DeleteTransfersAfterCheckpoint(txDel, checkBlock, checkTxIndex, checkLogIndex)
+	transfersToDelete, err := transferDb.GetTransfersAfterCheckpoint(txDel, 100, 1, 0)
 	require.NoError(t, err)
+
+	for _, xfer := range transfersToDelete {
+		err := transferDb.DeleteTransfer(txDel, xfer, xfer.TokenUniqueID)
+		require.NoError(t, err)
+	}
+
 	require.NoError(t, txDel.Commit())
 
 	// Now anything with blockNumber>100 should be removed, or blockNumber=100 and txIndex>1, etc.
