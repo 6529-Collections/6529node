@@ -30,7 +30,7 @@ type OwnerDbImpl struct{}
 // GetUniqueID retrieves the unique ID of an NFT for a specific address.
 func (o *OwnerDbImpl) GetUniqueID(txn *sql.Tx, contract, tokenID string, address string) (uint64, error) {
 	var uniqueID uint64
-	err := txn.QueryRow("SELECT token_unique_id FROM nft_owners WHERE contract = ? AND token_id = ? AND owner = ? ORDER BY timestamp DESC LIMIT 1", contract, tokenID, address).Scan(&uniqueID)
+	err := txn.QueryRow("SELECT token_unique_id FROM nft_owners WHERE contract = ? AND token_id = ? AND owner = ? ORDER BY timestamp DESC, token_unique_id DESC LIMIT 1", contract, tokenID, address).Scan(&uniqueID)
 	return uniqueID, err
 }
 
