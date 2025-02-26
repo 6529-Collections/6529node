@@ -19,6 +19,7 @@ type EthClient interface {
 	CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
 	SubscribeNewHead(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error)
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
+	BlockByNumber(ctx context.Context, number *big.Int) (*types.Block, error)
 	FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error)
 	CodeAt(ctx context.Context, account common.Address, blockNumber *big.Int) ([]byte, error)
 	TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)

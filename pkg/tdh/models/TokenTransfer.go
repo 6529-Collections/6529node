@@ -1,4 +1,4 @@
-package tokens
+package models
 
 type TransferType string
 
@@ -18,6 +18,7 @@ type TokenTransfer struct {
 	BlockNumber      uint64
 	TransactionIndex uint64
 	LogIndex         uint64
+	BlockTime        uint64
 	TxHash           string
 	EventName        string
 	From             string

@@ -3,7 +3,7 @@
 package mocks
 
 import (
-	tokens "github.com/6529-Collections/6529node/pkg/tdh/tokens"
+	models "github.com/6529-Collections/6529node/pkg/tdh/models"
 	types "github.com/ethereum/go-ethereum/core/types"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -14,23 +14,33 @@ type EthTransactionLogsDecoder struct {
 }
 
 // Decode provides a mock function with given fields: allLogs
-func (_m *EthTransactionLogsDecoder) Decode(allLogs []types.Log) [][]tokens.TokenTransfer {
+func (_m *EthTransactionLogsDecoder) Decode(allLogs []types.Log) ([][]models.TokenTransfer, error) {
 	ret := _m.Called(allLogs)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Decode")
 	}
 
-	var r0 [][]tokens.TokenTransfer
-	if rf, ok := ret.Get(0).(func([]types.Log) [][]tokens.TokenTransfer); ok {
+	var r0 [][]models.TokenTransfer
+	var r1 error
+	if rf, ok := ret.Get(0).(func([]types.Log) ([][]models.TokenTransfer, error)); ok {
+		return rf(allLogs)
+	}
+	if rf, ok := ret.Get(0).(func([]types.Log) [][]models.TokenTransfer); ok {
 		r0 = rf(allLogs)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([][]tokens.TokenTransfer)
+			r0 = ret.Get(0).([][]models.TokenTransfer)
 		}
 	}
 
-	return r0
+	if rf, ok := ret.Get(1).(func([]types.Log) error); ok {
+		r1 = rf(allLogs)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
 }
 
 // NewEthTransactionLogsDecoder creates a new instance of EthTransactionLogsDecoder. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.

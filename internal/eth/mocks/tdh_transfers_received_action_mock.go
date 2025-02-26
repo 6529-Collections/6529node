@@ -3,7 +3,7 @@
 package mocks
 
 import (
-	tokens "github.com/6529-Collections/6529node/pkg/tdh/tokens"
+	tokens "github.com/6529-Collections/6529node/pkg/tdh/models"
 	mock "github.com/stretchr/testify/mock"
 )
 
