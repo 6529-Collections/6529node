@@ -191,8 +191,7 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTr
 		return nil
 	}
 
-	// Run the transactional work using the generic DoInTx helper.
-	_, err := db.DoInTx(a.ctx, a.db, func(tx *sql.Tx) (struct{}, error) {
+	_, err := db.TxRunner(a.ctx, a.db, func(tx *sql.Tx) (struct{}, error) {
 		numBatches := (numTransfers + batchSize - 1) / batchSize // integer ceil
 
 		for batchIndex := 0; batchIndex < numBatches; batchIndex++ {

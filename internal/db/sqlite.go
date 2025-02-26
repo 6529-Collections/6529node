@@ -94,7 +94,7 @@ type RowQuerier interface {
 	QueryRow(query string, args ...interface{}) *sql.Row
 }
 
-func DoInTx[T any](ctx context.Context, db *sql.DB, fn func(*sql.Tx) (T, error)) (result T, err error) {
+func TxRunner[T any](ctx context.Context, db *sql.DB, fn func(*sql.Tx) (T, error)) (result T, err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return result, fmt.Errorf("failed to begin transaction: %w", err)

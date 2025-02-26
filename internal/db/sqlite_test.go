@@ -20,7 +20,7 @@ func sampleTxFuncErr(tx *sql.Tx) (int, error) {
 	return 0, errors.New("simulated error")
 }
 
-func TestDoInTx_Success(t *testing.T) {
+func TestTxRunner_Success(t *testing.T) {
 	// Create sqlmock database.
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -35,7 +35,7 @@ func TestDoInTx_Success(t *testing.T) {
 	mock.ExpectCommit()
 
 	ctx := context.Background()
-	result, err := DoInTx(ctx, db, sampleTxFunc)
+	result, err := TxRunner(ctx, db, sampleTxFunc)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
@@ -48,7 +48,7 @@ func TestDoInTx_Success(t *testing.T) {
 	}
 }
 
-func TestDoInTx_FuncError(t *testing.T) {
+func TestTxRunner_FuncError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("error creating sqlmock: %v", err)
@@ -61,7 +61,7 @@ func TestDoInTx_FuncError(t *testing.T) {
 	mock.ExpectRollback()
 
 	ctx := context.Background()
-	_, err = DoInTx(ctx, db, sampleTxFuncErr)
+	_, err = TxRunner(ctx, db, sampleTxFuncErr)
 	if err == nil {
 		t.Error("expected an error from sampleTxFuncErr, got nil")
 	}
@@ -74,7 +74,7 @@ func TestDoInTx_FuncError(t *testing.T) {
 	}
 }
 
-func TestDoInTx_CommitError(t *testing.T) {
+func TestTxRunner_CommitError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("error creating sqlmock: %v", err)
@@ -87,7 +87,7 @@ func TestDoInTx_CommitError(t *testing.T) {
 	mock.ExpectCommit().WillReturnError(fmt.Errorf("commit failed"))
 
 	ctx := context.Background()
-	_, err = DoInTx(ctx, db, sampleTxFunc)
+	_, err = TxRunner(ctx, db, sampleTxFunc)
 	if err == nil {
 		t.Error("expected commit error, got nil")
 	}
@@ -100,7 +100,7 @@ func TestDoInTx_CommitError(t *testing.T) {
 	}
 }
 
-func TestDoInTx_BeginTxError(t *testing.T) {
+func TestTxRunner_BeginTxError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("error creating sqlmock: %v", err)
@@ -111,7 +111,7 @@ func TestDoInTx_BeginTxError(t *testing.T) {
 	mock.ExpectBegin().WillReturnError(fmt.Errorf("begin error"))
 
 	ctx := context.Background()
-	_, err = DoInTx(ctx, db, sampleTxFunc)
+	_, err = TxRunner(ctx, db, sampleTxFunc)
 	if err == nil {
 		t.Error("expected error on BeginTx, got nil")
 	}
