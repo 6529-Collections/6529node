@@ -183,17 +183,37 @@ func (a *DefaultTdhTransfersReceivedAction) reset(
 }
 
 func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTransferBatch) error {
-	if len(transfersBatch.Transfers) > 0 {
-		zap.L().Debug("Processing transfers received action", zap.Int("transfers", len(transfersBatch.Transfers)))
-	}
-
-	const batchSize = 100
 	numTransfers := len(transfersBatch.Transfers)
 	if numTransfers == 0 {
 		return nil
 	}
 
-	_, err := db.TxRunner(a.ctx, a.db, func(tx *sql.Tx) (struct{}, error) {
+	_, txErr := db.TxRunner(a.ctx, a.db, func(tx *sql.Tx) (struct{}, error) {
+		zap.L().Debug("Processing transfers received action", zap.Int("transfers", numTransfers))
+
+		firstTransfer := transfersBatch.Transfers[0]
+		lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex, savedCheckpointErr := getLastSavedCheckpoint(a.db)
+		if savedCheckpointErr != nil {
+			return struct{}{}, fmt.Errorf("failed to get last saved checkpoint: %w", savedCheckpointErr)
+		}
+
+		// If new data is behind (or same logIndex) => reset needed.
+		if lastSavedBlock > firstTransfer.BlockNumber ||
+			(lastSavedBlock == firstTransfer.BlockNumber && lastSavedTxIndex > firstTransfer.TransactionIndex) ||
+			(lastSavedBlock == firstTransfer.BlockNumber && lastSavedTxIndex == firstTransfer.TransactionIndex && lastSavedLogIndex >= firstTransfer.LogIndex) {
+			zap.L().Warn("Checkpoint error: reset needed",
+				zap.String("lastCheckpoint", fmt.Sprintf("%d:%d:%d", lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex)),
+				zap.String("firstTransfer", fmt.Sprintf("%d:%d:%d", firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex)),
+			)
+			zap.L().Warn("Resetting due to checkpoint mismatch")
+
+			if resetErr := a.reset(tx, firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex); resetErr != nil {
+				return struct{}{}, resetErr
+			}
+		}
+
+		const batchSize = 100
+
 		numBatches := (numTransfers + batchSize - 1) / batchSize // integer ceil
 
 		for batchIndex := 0; batchIndex < numBatches; batchIndex++ {
@@ -204,63 +224,36 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTr
 			}
 			chunk := transfersBatch.Transfers[start:end]
 
-			firstTransfer := chunk[0]
-			lastTransfer := chunk[len(chunk)-1]
-
-			lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex, err := getLastSavedCheckpoint(tx)
-			if err != nil {
-				return struct{}{}, fmt.Errorf("failed to get last saved checkpoint: %w", err)
-			}
-
-			// If new data is behind (or same logIndex) => reset needed.
-			if lastSavedBlock > firstTransfer.BlockNumber ||
-				(lastSavedBlock == firstTransfer.BlockNumber && lastSavedTxIndex > firstTransfer.TransactionIndex) ||
-				(lastSavedBlock == firstTransfer.BlockNumber && lastSavedTxIndex == firstTransfer.TransactionIndex && lastSavedLogIndex >= firstTransfer.LogIndex) {
-				zap.L().Warn("Checkpoint error: reset needed",
-					zap.String("lastCheckpoint", fmt.Sprintf("%d:%d:%d", lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex)),
-					zap.String("firstTransfer", fmt.Sprintf("%d:%d:%d", firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex)),
-				)
-				zap.L().Warn("Resetting due to checkpoint mismatch")
-				if err := a.reset(tx, firstTransfer.BlockNumber, firstTransfer.TransactionIndex, firstTransfer.LogIndex); err != nil {
-					return struct{}{}, err
-				}
-			}
-
 			for _, t := range chunk {
 				if err := a.applyTransfer(tx, t); err != nil {
 					return struct{}{}, err
 				}
 			}
 
-			if err := updateCheckpoint(tx, lastTransfer.BlockNumber, lastTransfer.TransactionIndex, lastTransfer.LogIndex); err != nil {
-				return struct{}{}, err
-			}
-
-			zap.L().Info("Checkpoint saved", zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastTransfer.BlockNumber, lastTransfer.TransactionIndex, lastTransfer.LogIndex)))
-
-			// Log batch details.
-			if len(transfersBatch.Transfers) > 0 {
-				zap.L().Debug("Batch processed",
-					zap.String("batch", fmt.Sprintf("%d/%d", batchIndex+1, numBatches)),
-					zap.Int("batchSize", len(chunk)),
-					zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex)),
-				)
-			} else {
-				zap.L().Debug("Checkpoint saved",
-					zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex)),
-				)
-			}
+			zap.L().Debug("Batch processed",
+				zap.String("batch", fmt.Sprintf("%d/%d", batchIndex+1, numBatches)),
+				zap.Int("batchSize", len(chunk)),
+				zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex)),
+			)
 		}
+
+		lastTransfer := transfersBatch.Transfers[numTransfers-1]
+
+		if updateCheckpointErr := updateCheckpoint(tx, lastTransfer.BlockNumber, lastTransfer.TransactionIndex, lastTransfer.LogIndex); updateCheckpointErr != nil {
+			return struct{}{}, updateCheckpointErr
+		}
+
+		zap.L().Info("Checkpoint saved", zap.String("checkpoint", fmt.Sprintf("%d:%d:%d", lastTransfer.BlockNumber, lastTransfer.TransactionIndex, lastTransfer.LogIndex)))
 
 		return struct{}{}, nil
 	})
 
-	if err != nil {
-		return err
+	if txErr != nil {
+		return txErr
 	}
 
-	if err := a.progressTracker.SetProgress(transfersBatch.BlockNumber, a.ctx); err != nil {
-		return fmt.Errorf("error setting progress: %w", err)
+	if progressErr := a.progressTracker.SetProgress(transfersBatch.BlockNumber, a.ctx); progressErr != nil {
+		return fmt.Errorf("error setting progress: %w", progressErr)
 	}
 
 	return nil
