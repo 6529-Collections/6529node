@@ -151,10 +151,7 @@ type mockTransferDb struct {
 	DeleteTransferFn               func(tx *sql.Tx, transfer ethdb.NFTTransfer, tokenUniqueID uint64) error
 	GetTransfersAfterCheckpointFn  func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error)
 	GetLatestTransferFn            func(tx *sql.Tx) (*ethdb.NFTTransfer, error)
-	GetAllTransfersFn              func(rq db.QueryRunner, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error)
-	GetTransfersForContractFn      func(rq db.QueryRunner, contract string, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error)
-	GetTransfersForContractTokenFn func(rq db.QueryRunner, contract string, tokenID string, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error)
-	GetTransfersForTxHashFn        func(rq db.QueryRunner, txHash string, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error)
+	GetPaginatedResponseForQueryFn func(rq db.QueryRunner, queryOptions db.QueryOptions, queryParams []interface{}) (total int, transfers []ethdb.NFTTransfer, err error)
 }
 
 func (m *mockTransferDb) StoreTransfer(tx *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error {
@@ -169,17 +166,8 @@ func (m *mockTransferDb) DeleteTransfer(tx *sql.Tx, transfer ethdb.NFTTransfer, 
 func (m *mockTransferDb) GetLatestTransfer(tx *sql.Tx) (*ethdb.NFTTransfer, error) {
 	return m.GetLatestTransferFn(tx)
 }
-func (m *mockTransferDb) GetAllTransfers(rq db.QueryRunner, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error) {
-	return m.GetAllTransfersFn(rq, pageSize, page)
-}
-func (m *mockTransferDb) GetTransfersForContract(rq db.QueryRunner, contract string, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error) {
-	return m.GetTransfersForContractFn(rq, contract, pageSize, page)
-}
-func (m *mockTransferDb) GetTransfersForContractToken(rq db.QueryRunner, contract string, tokenID string, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error) {
-	return m.GetTransfersForContractTokenFn(rq, contract, tokenID, pageSize, page)
-}
-func (m *mockTransferDb) GetTransfersForTxHash(rq db.QueryRunner, txHash string, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error) {
-	return m.GetTransfersForTxHashFn(rq, txHash, pageSize, page)
+func (m *mockTransferDb) GetPaginatedResponseForQuery(rq db.QueryRunner, queryOptions db.QueryOptions, queryParams []interface{}) (total int, transfers []ethdb.NFTTransfer, err error) {
+	return m.GetPaginatedResponseForQueryFn(rq, queryOptions, queryParams)
 }
 
 // Utility to quickly create the DefaultTdhTransfersReceivedAction with mocks:

@@ -133,3 +133,17 @@ func TxRunner[T any](ctx context.Context, db *sql.DB, fn func(*sql.Tx) (T, error
 type RowScanner interface {
 	Scan(dest ...interface{}) error
 }
+
+type QueryDirection string
+
+const (
+	QueryDirectionAsc  QueryDirection = "ASC"
+	QueryDirectionDesc QueryDirection = "DESC"
+)
+
+type QueryOptions struct {
+	Where     string
+	PageSize  int
+	Page      int
+	Direction QueryDirection
+}

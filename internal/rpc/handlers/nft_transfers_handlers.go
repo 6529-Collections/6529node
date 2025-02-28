@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/6529-Collections/6529node/internal/db"
 	"github.com/6529-Collections/6529node/internal/eth/ethdb"
 )
 
@@ -39,87 +40,38 @@ func NFTTransfersGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
 	}
 
 	if txHash != "" {
-		return NFTTransfersGetListForTxHashHandler(r, db, txHash)
+		query := "tx_hash = ?"
+		queryParams := []interface{}{txHash}
+		return NFTTransfersQueryHandler(r, db, query, queryParams)
 	}
 
 	if contract != "" && tokenID != "" {
-		return NFTTransfersGetListForContractTokenHandler(r, db, contract, tokenID)
+		query := "contract = ? AND token_id = ?"
+		queryParams := []interface{}{contract, tokenID}
+		return NFTTransfersQueryHandler(r, db, query, queryParams)
 	}
 
 	if contract != "" {
-		return NFTTransfersGetListForContractHandler(r, db, contract)
+		query := "contract = ?"
+		queryParams := []interface{}{contract}
+		return NFTTransfersQueryHandler(r, db, query, queryParams)
 	}
 
-	return NFTTransfersGetListHandler(r, db)
+	query := ""
+	queryParams := []interface{}{}
+	return NFTTransfersQueryHandler(r, db, query, queryParams)
 }
 
-func NFTTransfersGetListHandler(r *http.Request, db *sql.DB) (NFTTransfersResponse, error) {
+func NFTTransfersQueryHandler(r *http.Request, rq db.QueryRunner, query string, queryParams []interface{}) (NFTTransfersResponse, error) {
 	page, pageSize, _ := ExtractPagination(r)
-
-	total, transfers, err := transferDb.GetAllTransfers(db, pageSize, page)
-	if err != nil {
-		return NFTTransfersResponse{}, err
+	queryOptions := db.QueryOptions{
+		Where:     query,
+		PageSize:  pageSize,
+		Page:      page,
+		Direction: db.QueryDirectionAsc,
 	}
 
-	resp := NFTTransfersResponse{
-		PaginatedResponse: PaginatedResponse{
-			Page:     page,
-			PageSize: pageSize,
-		},
-		Data: transfers,
-	}
-
-	resp.ReturnPaginatedData(r, total)
-
-	return resp, nil
-}
-
-func NFTTransfersGetListForContractHandler(r *http.Request, db *sql.DB, contract string) (NFTTransfersResponse, error) {
-	page, pageSize, _ := ExtractPagination(r)
-
-	total, transfers, err := transferDb.GetTransfersForContract(db, contract, pageSize, page)
-	if err != nil {
-		return NFTTransfersResponse{}, err
-	}
-
-	resp := NFTTransfersResponse{
-		PaginatedResponse: PaginatedResponse{
-			Page:     page,
-			PageSize: pageSize,
-		},
-		Data: transfers,
-	}
-
-	resp.ReturnPaginatedData(r, total)
-
-	return resp, nil
-}
-
-func NFTTransfersGetListForContractTokenHandler(r *http.Request, db *sql.DB, contract string, tokenID string) (NFTTransfersResponse, error) {
-	page, pageSize, _ := ExtractPagination(r)
-
-	total, transfers, err := transferDb.GetTransfersForContractToken(db, contract, tokenID, pageSize, page)
-	if err != nil {
-		return NFTTransfersResponse{}, err
-	}
-
-	resp := NFTTransfersResponse{
-		PaginatedResponse: PaginatedResponse{
-			Page:     page,
-			PageSize: pageSize,
-		},
-		Data: transfers,
-	}
-
-	resp.ReturnPaginatedData(r, total)
-
-	return resp, nil
-}
-
-func NFTTransfersGetListForTxHashHandler(r *http.Request, db *sql.DB, txHash string) (NFTTransfersResponse, error) {
-	page, pageSize, _ := ExtractPagination(r)
-
-	total, transfers, err := transferDb.GetTransfersForTxHash(db, txHash, pageSize, page)
+	total, transfers, err := transferDb.GetPaginatedResponseForQuery(rq, queryOptions, queryParams)
 	if err != nil {
 		return NFTTransfersResponse{}, err
 	}

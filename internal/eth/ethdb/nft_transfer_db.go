@@ -2,9 +2,11 @@ package ethdb
 
 import (
 	"database/sql"
+	"fmt"
 
 	"github.com/6529-Collections/6529node/internal/db"
 	"github.com/6529-Collections/6529node/pkg/tdh/models"
+	"go.uber.org/zap"
 )
 
 // NFTTransferDb interface for managing token transfers.
@@ -14,10 +16,7 @@ type NFTTransferDb interface {
 	DeleteTransfer(tx *sql.Tx, transfer NFTTransfer, tokenUniqueID uint64) error
 	GetLatestTransfer(tx *sql.Tx) (*NFTTransfer, error)
 
-	GetAllTransfers(rq db.QueryRunner, pageSize int, page int) (total int, transfers []NFTTransfer, err error)
-	GetTransfersForContract(rq db.QueryRunner, contract string, pageSize int, page int) (total int, transfers []NFTTransfer, err error)
-	GetTransfersForContractToken(rq db.QueryRunner, contract string, tokenID string, pageSize int, page int) (total int, transfers []NFTTransfer, err error)
-	GetTransfersForTxHash(rq db.QueryRunner, txHash string, pageSize int, page int) (total int, transfers []NFTTransfer, err error)
+	GetPaginatedResponseForQuery(rq db.QueryRunner, queryOptions db.QueryOptions, queryParams []interface{}) (total int, transfers []NFTTransfer, err error)
 }
 
 // NewTransferDb creates a new NFTTransferDb instance.
@@ -102,13 +101,21 @@ var scanTransfers = func(rows *sql.Rows) ([]NFTTransfer, error) {
 	return transfers, nil
 }
 
-func (t *TransferDbImpl) GetAllTransfers(rq db.QueryRunner, pageSize int, page int) (total int, transfers []NFTTransfer, err error) {
-	offset := (page - 1) * pageSize
+func (t *TransferDbImpl) GetPaginatedResponseForQuery(rq db.QueryRunner, queryOptions db.QueryOptions, queryParams []interface{}) (total int, transfers []NFTTransfer, err error) {
+	offset := (queryOptions.Page - 1) * queryOptions.PageSize
 
-	rows, err := rq.Query(allTransfersQuery+`
-		ORDER BY block_number ASC, transaction_index ASC, log_index ASC
-		LIMIT ? OFFSET ?
-	`, pageSize, offset)
+	order := fmt.Sprintf("block_number %s, transaction_index %s, log_index %s", queryOptions.Direction, queryOptions.Direction, queryOptions.Direction)
+
+	where := ""
+	if queryOptions.Where != "" {
+		where = fmt.Sprintf("WHERE %s", queryOptions.Where)
+	}
+
+	query := fmt.Sprintf("%s %s ORDER BY %s LIMIT ? OFFSET ?", allTransfersQuery, where, order)
+	params := append(queryParams, queryOptions.PageSize, offset)
+	zap.L().Info("i am query", zap.String("query", query), zap.Any("params", params))
+
+	rows, err := rq.Query(query, params...)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -124,99 +131,8 @@ func (t *TransferDbImpl) GetAllTransfers(rq db.QueryRunner, pageSize int, page i
 		return 0, nil, err
 	}
 
-	err = rq.QueryRow("SELECT COUNT(*) FROM nft_transfers").Scan(&total)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	return total, transfers, nil
-}
-
-func (t *TransferDbImpl) GetTransfersForContract(rq db.QueryRunner, contract string, pageSize int, page int) (total int, transfers []NFTTransfer, err error) {
-	offset := (page - 1) * pageSize
-
-	rows, err := rq.Query(allTransfersQuery+`
-		WHERE contract = ?
-		ORDER BY block_number ASC, transaction_index ASC, log_index ASC
-		LIMIT ? OFFSET ?
-	`, contract, pageSize, offset)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer rows.Close()
-
-	transfers, err = scanTransfers(rows)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	err = rows.Err()
-	if err != nil {
-		return 0, nil, err
-	}
-
-	err = rq.QueryRow("SELECT COUNT(*) FROM nft_transfers WHERE contract = ?", contract).Scan(&total)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	return total, transfers, nil
-}
-
-func (t *TransferDbImpl) GetTransfersForContractToken(rq db.QueryRunner, contract string, tokenID string, pageSize int, page int) (total int, transfers []NFTTransfer, err error) {
-	offset := (page - 1) * pageSize
-
-	rows, err := rq.Query(allTransfersQuery+`
-		WHERE contract = ? AND token_id = ?
-		ORDER BY block_number ASC, transaction_index ASC, log_index ASC
-		LIMIT ? OFFSET ?
-	`, contract, tokenID, pageSize, offset)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer rows.Close()
-
-	transfers, err = scanTransfers(rows)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	err = rows.Err()
-	if err != nil {
-		return 0, nil, err
-	}
-
-	err = rq.QueryRow("SELECT COUNT(*) FROM nft_transfers WHERE contract = ? AND token_id = ?", contract, tokenID).Scan(&total)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	return total, transfers, nil
-}
-
-func (t *TransferDbImpl) GetTransfersForTxHash(rq db.QueryRunner, txHash string, pageSize int, page int) (total int, transfers []NFTTransfer, err error) {
-	offset := (page - 1) * pageSize
-
-	rows, err := rq.Query(allTransfersQuery+`
-		WHERE tx_hash = ?
-		ORDER BY block_number ASC, transaction_index ASC, log_index ASC
-		LIMIT ? OFFSET ?`, txHash, pageSize, offset)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer rows.Close()
-
-	transfers, err = scanTransfers(rows)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	err = rows.Err()
-	if err != nil {
-		return 0, nil, err
-	}
-
-	err = rq.QueryRow("SELECT COUNT(*) FROM nft_transfers WHERE tx_hash = ?", txHash).Scan(&total)
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM nft_transfers %s", where)
+	err = rq.QueryRow(countQuery, queryParams...).Scan(&total)
 	if err != nil {
 		return 0, nil, err
 	}
