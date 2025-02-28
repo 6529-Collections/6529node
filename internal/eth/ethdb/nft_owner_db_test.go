@@ -20,10 +20,10 @@ import (
 
 // setupTestOwnerDb spins up a test DB, returns:
 //   - *sql.DB
-//   - OwnerDb (system under test)
+//   - NFTOwnerDb (system under test)
 //   - NFTDb (to create references in nfts table when needed)
 //   - cleanup function
-func setupTestOwnerDb(t *testing.T) (*sql.DB, OwnerDb, NFTDb, func()) {
+func setupTestOwnerDb(t *testing.T) (*sql.DB, NFTOwnerDb, NFTDb, func()) {
 	db, cleanup := testdb.SetupTestDB(t)
 
 	ownerDb := NewOwnerDb()

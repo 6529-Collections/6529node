@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"time"
@@ -20,17 +21,47 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-func StartRPCServer(port int, ctx context.Context) func() {
+func StartRPCServer(port int, sqlite *sql.DB, ctx context.Context) func() {
 	zap.L().Info("Starting RPC server on port", zap.Int("port", port))
 	mux := http.NewServeMux()
 
-	handlers.SetupHandlers(mux, handlers.MethodHandlers{
-		handlers.CreateApiV1Path("status"): {
+	apiHandlers := make(handlers.MethodHandlers)
+
+	// add status endpoint for all supported versions
+	for _, version := range handlers.SupportedVersions {
+		path := handlers.CreateApiPath(version, string(handlers.StatusEndpoint))
+		apiHandlers[path] = map[handlers.Method]func(r *http.Request) (any, error){
 			handlers.HTTP_GET: func(r *http.Request) (any, error) {
 				return handlers.StatusGetHandler(r)
 			},
+		}
+	}
+
+	// /nfts/*
+	nftV1WildcardPath := handlers.CreateApiPath(handlers.ApiV1, string(handlers.NFTsEndpoint))
+	apiHandlers[nftV1WildcardPath] = map[handlers.Method]func(r *http.Request) (any, error){
+		handlers.HTTP_GET: func(r *http.Request) (any, error) {
+			return handlers.NFTsGetHandler(r, sqlite)
 		},
-	})
+	}
+
+	// /nft_transfers/*
+	nftTransferV1WildcardPath := handlers.CreateApiPath(handlers.ApiV1, string(handlers.NFTTransfersEndpoint))
+	apiHandlers[nftTransferV1WildcardPath] = map[handlers.Method]func(r *http.Request) (any, error){
+		handlers.HTTP_GET: func(r *http.Request) (any, error) {
+			return handlers.NFTTransfersGetHandler(r, sqlite)
+		},
+	}
+
+	// /nft_owners/*
+	nftOwnerV1WildcardPath := handlers.CreateApiPath(handlers.ApiV1, string(handlers.NFTOwnersEndpoint))
+	apiHandlers[nftOwnerV1WildcardPath] = map[handlers.Method]func(r *http.Request) (any, error){
+		handlers.HTTP_GET: func(r *http.Request) (any, error) {
+			return handlers.NFTOwnersGetHandler(r, sqlite)
+		},
+	}
+
+	handlers.SetupHandlers(mux, apiHandlers)
 
 	addr := fmt.Sprintf(":%d", port)
 	server := &http.Server{
@@ -57,6 +88,7 @@ func StartRPCServer(port int, ctx context.Context) func() {
 	return closeFunc
 }
 
+// loggingMiddleware logs details about incoming HTTP requests.
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rw := &responseWriter{w, http.StatusOK}

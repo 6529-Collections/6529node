@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"go.uber.org/zap"
@@ -17,11 +18,28 @@ var (
 	HTTP_DELETE Method = "DELETE"
 )
 
-func CreateApiV1Path(path string) Path {
-	if len(path) > 0 && path[0] == '/' {
-		path = path[1:]
+type ApiVersion string
+
+const (
+	ApiV1 ApiVersion = "v1"
+)
+
+var SupportedVersions = []ApiVersion{ApiV1}
+
+type ApiEndpoint string
+
+const (
+	StatusEndpoint       ApiEndpoint = "status"
+	NFTsEndpoint         ApiEndpoint = "nfts/"
+	NFTTransfersEndpoint ApiEndpoint = "nft_transfers/"
+	NFTOwnersEndpoint    ApiEndpoint = "nft_owners/"
+)
+
+func CreateApiPath(version ApiVersion, endpoint string) Path {
+	if len(endpoint) > 0 && endpoint[0] == '/' {
+		endpoint = endpoint[1:]
 	}
-	return Path("/api/v1/" + path)
+	return Path(fmt.Sprintf("/api/%s/%s", version, endpoint))
 }
 
 type MethodHandlers map[Path]map[Method]func(r *http.Request) (any, error)
@@ -37,6 +55,10 @@ func SetupHandlers(mux *http.ServeMux, handlers MethodHandlers) {
 			}
 			resp, err := handler(r)
 			if err != nil {
+				if err.Error() == "not found" {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
 				zap.L().Error("failed to handle request", zap.Error(err))
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return

@@ -21,12 +21,12 @@ type DefaultTdhTransfersReceivedAction struct {
 	ctx             context.Context
 	db              *sql.DB
 	progressTracker ethdb.TdhIdxTrackerDb
-	transferDb      ethdb.TransferDb
-	ownerDb         ethdb.OwnerDb
+	transferDb      ethdb.NFTTransferDb
+	ownerDb         ethdb.NFTOwnerDb
 	nftDb           ethdb.NFTDb
 }
 
-func NewTdhTransfersReceivedActionImpl(ctx context.Context, db *sql.DB, transferDb ethdb.TransferDb, ownerDb ethdb.OwnerDb, nftDb ethdb.NFTDb, progressTracker ethdb.TdhIdxTrackerDb) *DefaultTdhTransfersReceivedAction {
+func NewTdhTransfersReceivedActionImpl(ctx context.Context, db *sql.DB, transferDb ethdb.NFTTransferDb, ownerDb ethdb.NFTOwnerDb, nftDb ethdb.NFTDb, progressTracker ethdb.TdhIdxTrackerDb) *DefaultTdhTransfersReceivedAction {
 	lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex, err := getLastSavedCheckpoint(db)
 	if err != nil {
 		zap.L().Error("Failed to get last saved checkpoint", zap.Error(err))
@@ -144,7 +144,7 @@ func (a *DefaultTdhTransfersReceivedAction) reset(
 		return fmt.Errorf("failed to get transfers: %w", err)
 	}
 
-	// 2) Sort descending
+	// 2) Sort descending by block number, tx index, and log index
 	sort.Slice(transfers, func(i, j int) bool {
 		if transfers[i].BlockNumber != transfers[j].BlockNumber {
 			return transfers[i].BlockNumber > transfers[j].BlockNumber
@@ -188,11 +188,22 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTr
 		return nil
 	}
 
+	// sort ascending by block number, tx index, and log index
+	sort.Slice(transfersBatch.Transfers, func(i, j int) bool {
+		if transfersBatch.Transfers[i].BlockNumber != transfersBatch.Transfers[j].BlockNumber {
+			return transfersBatch.Transfers[i].BlockNumber < transfersBatch.Transfers[j].BlockNumber
+		}
+		if transfersBatch.Transfers[i].TransactionIndex != transfersBatch.Transfers[j].TransactionIndex {
+			return transfersBatch.Transfers[i].TransactionIndex < transfersBatch.Transfers[j].TransactionIndex
+		}
+		return transfersBatch.Transfers[i].LogIndex < transfersBatch.Transfers[j].LogIndex
+	})
+
 	_, txErr := db.TxRunner(a.ctx, a.db, func(tx *sql.Tx) (struct{}, error) {
 		zap.L().Debug("Processing transfers received action", zap.Int("transfers", numTransfers))
 
 		firstTransfer := transfersBatch.Transfers[0]
-		lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex, savedCheckpointErr := getLastSavedCheckpoint(a.db)
+		lastSavedBlock, lastSavedTxIndex, lastSavedLogIndex, savedCheckpointErr := getLastSavedCheckpoint(tx)
 		if savedCheckpointErr != nil {
 			return struct{}{}, fmt.Errorf("failed to get last saved checkpoint: %w", savedCheckpointErr)
 		}
@@ -261,7 +272,7 @@ func (a *DefaultTdhTransfersReceivedAction) Handle(transfersBatch models.TokenTr
 	return nil
 }
 
-var getLastSavedCheckpoint = func(q db.RowQuerier) (uint64, uint64, uint64, error) {
+var getLastSavedCheckpoint = func(q db.QueryRunner) (uint64, uint64, uint64, error) {
 	checkpoint := &ethdb.TokenTransferCheckpoint{}
 	err := q.QueryRow("SELECT block_number, transaction_index, log_index FROM token_transfers_checkpoint").Scan(&checkpoint.BlockNumber, &checkpoint.TransactionIndex, &checkpoint.LogIndex)
 	if err != nil {

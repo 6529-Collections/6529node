@@ -5,33 +5,33 @@ import (
 )
 
 type NFT struct {
-	Contract    string
-	TokenID     string
-	Supply      uint64
-	BurntSupply uint64
+	Contract    string `json:"contract"`
+	TokenID     string `json:"token_id"`
+	Supply      uint64 `json:"supply"`
+	BurntSupply uint64 `json:"burnt_supply"`
 }
 
 type NFTOwner struct {
-	Owner         string
-	Contract      string
-	TokenID       string
-	TokenUniqueID uint64
-	Timestamp     uint64
+	Owner         string `json:"owner"`
+	Contract      string `json:"contract"`
+	TokenID       string `json:"token_id"`
+	TokenUniqueID uint64 `json:"token_unique_id"`
+	Timestamp     uint64 `json:"timestamp"`
 }
 
 type NFTTransfer struct {
-	BlockNumber      uint64
-	TransactionIndex uint64
-	LogIndex         uint64
-	BlockTime        uint64
-	TxHash           string
-	EventName        string
-	From             string
-	To               string
-	Contract         string
-	TokenID          string
-	TokenUniqueID    uint64
-	Type             models.TransferType
+	BlockNumber      uint64              `json:"block_number"`
+	TransactionIndex uint64              `json:"transaction_index"`
+	LogIndex         uint64              `json:"log_index"`
+	BlockTime        uint64              `json:"block_time"`
+	TxHash           string              `json:"tx_hash"`
+	EventName        string              `json:"event_name"`
+	From             string              `json:"from"`
+	To               string              `json:"to"`
+	Contract         string              `json:"contract"`
+	TokenID          string              `json:"token_id"`
+	TokenUniqueID    uint64              `json:"token_unique_id"`
+	Type             models.TransferType `json:"type"`
 }
 
 type TokenTransferCheckpoint struct {
