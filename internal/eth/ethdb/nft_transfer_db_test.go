@@ -419,3 +419,214 @@ func TestTransferDb_ConcurrentAccess(t *testing.T) {
 		assert.True(t, found, "Expected to find blockNumber %d in results", 100+i)
 	}
 }
+
+func TestTransferDb_AllGettersCombined(t *testing.T) {
+	db, transferDb, cleanup := setupTestTransferDb(t)
+	defer cleanup()
+
+	// Prepare a collection of NFTTransfer records.
+	// Note: Some records share the same contract, tokenID, or txHash for filtering.
+	testTransfers := []models.TokenTransfer{
+		{
+			BlockNumber:      10,
+			TransactionIndex: 1,
+			LogIndex:         0,
+			TxHash:           "0xA",
+			EventName:        "Mint",
+			From:             "",
+			To:               "0xRecipient1",
+			Contract:         "0xContract1",
+			TokenID:          "101",
+			BlockTime:        1000,
+			Type:             "MINT",
+		},
+		{
+			BlockNumber:      12,
+			TransactionIndex: 0,
+			LogIndex:         2,
+			TxHash:           "0xB",
+			EventName:        "Sale",
+			From:             "0xSender1",
+			To:               "0xRecipient2",
+			Contract:         "0xContract2",
+			TokenID:          "201",
+			BlockTime:        1200,
+			Type:             "SALE",
+		},
+		{
+			BlockNumber:      15,
+			TransactionIndex: 2,
+			LogIndex:         3,
+			TxHash:           "0xC",
+			EventName:        "Transfer",
+			From:             "0xSender2",
+			To:               "0xRecipient3",
+			Contract:         "0xContract1",
+			TokenID:          "102",
+			BlockTime:        1500,
+			Type:             "SEND",
+		},
+		{
+			BlockNumber:      20,
+			TransactionIndex: 1,
+			LogIndex:         0,
+			TxHash:           "0xD",
+			EventName:        "Mint",
+			From:             "",
+			To:               "0xRecipient4",
+			Contract:         "0xTarget",
+			TokenID:          "501",
+			BlockTime:        2000,
+			Type:             "MINT",
+		},
+		{
+			BlockNumber:      22,
+			TransactionIndex: 0,
+			LogIndex:         1,
+			TxHash:           "0xE",
+			EventName:        "Sale",
+			From:             "0xSender3",
+			To:               "0xRecipient5",
+			Contract:         "0xOther",
+			TokenID:          "601",
+			BlockTime:        2200,
+			Type:             "SALE",
+		},
+		{
+			BlockNumber:      25,
+			TransactionIndex: 2,
+			LogIndex:         3,
+			TxHash:           "0xF",
+			EventName:        "Transfer",
+			From:             "0xSender4",
+			To:               "0xRecipient6",
+			Contract:         "0xTarget",
+			TokenID:          "502",
+			BlockTime:        2500,
+			Type:             "SEND",
+		},
+		{
+			BlockNumber:      30,
+			TransactionIndex: 0,
+			LogIndex:         0,
+			TxHash:           "0xG",
+			EventName:        "Mint",
+			From:             "",
+			To:               "0xRecipient7",
+			Contract:         "0xCT",
+			TokenID:          "1001",
+			BlockTime:        3000,
+			Type:             "MINT",
+		},
+		{
+			BlockNumber:      32,
+			TransactionIndex: 1,
+			LogIndex:         1,
+			TxHash:           "0xH",
+			EventName:        "Sale",
+			From:             "0xSender5",
+			To:               "0xRecipient8",
+			Contract:         "0xCT",
+			TokenID:          "1002",
+			BlockTime:        3200,
+			Type:             "SALE",
+		},
+		{
+			BlockNumber:      35,
+			TransactionIndex: 2,
+			LogIndex:         2,
+			TxHash:           "0xI",
+			EventName:        "Transfer",
+			From:             "0xSender6",
+			To:               "0xRecipient9",
+			Contract:         "0xCT",
+			TokenID:          "1001",
+			BlockTime:        3500,
+			Type:             "SEND",
+		},
+		{
+			BlockNumber:      40,
+			TransactionIndex: 0,
+			LogIndex:         0,
+			TxHash:           "0xTargetTx",
+			EventName:        "Mint",
+			From:             "",
+			To:               "0xRecipient10",
+			Contract:         "0xCT1",
+			TokenID:          "2001",
+			BlockTime:        4000,
+			Type:             "MINT",
+		},
+		{
+			BlockNumber:      42,
+			TransactionIndex: 1,
+			LogIndex:         1,
+			TxHash:           "0xOtherTx",
+			EventName:        "Sale",
+			From:             "0xSender7",
+			To:               "0xRecipient11",
+			Contract:         "0xCT2",
+			TokenID:          "2002",
+			BlockTime:        4200,
+			Type:             "SALE",
+		},
+		{
+			BlockNumber:      45,
+			TransactionIndex: 2,
+			LogIndex:         2,
+			TxHash:           "0xTargetTx",
+			EventName:        "Transfer",
+			From:             "0xSender8",
+			To:               "0xRecipient12",
+			Contract:         "0xCT1",
+			TokenID:          "2003",
+			BlockTime:        4500,
+			Type:             "SEND",
+		},
+	}
+
+	// Insert all records in one transaction.
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	for i, nft := range testTransfers {
+		err := transferDb.StoreTransfer(tx, nft, uint64(i+100))
+		require.NoError(t, err)
+	}
+	require.NoError(t, tx.Commit())
+
+	// Open a new transaction for querying.
+	txQuery, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	defer txQuery.Rollback()
+
+	// 1. Test GetAllTransfers.
+	totalAll, allTransfers, err := transferDb.GetAllTransfers(txQuery, 20, 1)
+	require.NoError(t, err)
+	assert.Equal(t, len(testTransfers), totalAll, "Total count should equal all inserted records")
+	assert.Len(t, allTransfers, len(testTransfers), "Should return all records")
+
+	// 2. Test GetTransfersForContract (for contract "0xTarget").
+	totalTarget, targetTransfers, err := transferDb.GetTransfersForContract(txQuery, "0xTarget", 20, 1)
+	require.NoError(t, err)
+	assert.Equal(t, 2, totalTarget, "Should have 2 records for contract 0xTarget")
+	for _, rec := range targetTransfers {
+		assert.Equal(t, "0xTarget", rec.Contract)
+	}
+
+	// 3. Test GetTransfersForContractToken (for contract "0xCT" and tokenID "1001").
+	totalCT, ctTransfers, err := transferDb.GetTransfersForContractToken(txQuery, "0xCT", "1001", 20, 1)
+	require.NoError(t, err)
+	assert.Equal(t, 2, totalCT, "Should have 2 records for contract 0xCT with tokenID 1001")
+	for _, rec := range ctTransfers {
+		assert.Equal(t, "0xCT", rec.Contract)
+		assert.Equal(t, "1001", rec.TokenID)
+	}
+
+	// 4. Test GetTransfersForTxHash (for txHash "0xTargetTx").
+	totalTx, txTransfers, err := transferDb.GetTransfersForTxHash(txQuery, "0xTargetTx", 20, 1)
+	require.NoError(t, err)
+	assert.Equal(t, 2, totalTx, "Should have 2 records for txHash 0xTargetTx")
+	for _, rec := range txTransfers {
+		assert.Equal(t, "0xTargetTx", rec.TxHash)
+	}
+}
