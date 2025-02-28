@@ -74,11 +74,7 @@ func (t *TransferDbImpl) GetLatestTransfer(tx *sql.Tx) (*NFTTransfer, error) {
 	row := tx.QueryRow(allTransfersQuery + `
 		ORDER BY block_number DESC, transaction_index DESC, log_index DESC LIMIT 1`)
 
-	transfer, err := scanTransfer(row)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	return transfer, err
+	return scanTransfer(row)
 }
 
 func scanTransfer(scanner db.RowScanner) (*NFTTransfer, error) {
@@ -94,7 +90,7 @@ func scanTransfer(scanner db.RowScanner) (*NFTTransfer, error) {
 	return &transfer, err
 }
 
-func scanTransfers(rows *sql.Rows) ([]NFTTransfer, error) {
+var scanTransfers = func(rows *sql.Rows) ([]NFTTransfer, error) {
 	var transfers []NFTTransfer
 	for rows.Next() {
 		transfer, err := scanTransfer(rows)

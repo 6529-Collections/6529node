@@ -653,6 +653,62 @@ func TestTransferDb_GetAllTransfers_QueryError(t *testing.T) {
 	assert.Nil(t, transfers)
 }
 
+func TestTransferDb_GetAllTransfers_ScanError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error creating sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	mock.ExpectQuery(`(?i)SELECT\s+.*\s+FROM\s+nft_transfers\s+ORDER BY\s+block_number\s+ASC,.*LIMIT\s+\?\s+OFFSET\s+\?`).WillReturnRows(
+		sqlmock.NewRows([]string{"block_number", "transaction_index", "log_index", "tx_hash", "event_name", "from_address", "to_address", "contract", "token_id", "token_unique_id", "block_time", "transfer_type"}).
+			AddRow(1, 1, 1, "0x1", "Mint", "0x1", "0x2", "0x3", "100", "100", 1000, "MINT").
+			AddRow(2, 2, 2, "0x2", "Transfer", "0x1", "0x3", "0x3", "101", "101", 2000, "SEND"),
+	)
+
+	transferDb := NewTransferDb()
+
+	originalScanTransfers := scanTransfers
+	scanTransfers = func(rows *sql.Rows) ([]NFTTransfer, error) {
+		return nil, errors.New("scan error")
+	}
+	defer func() { scanTransfers = originalScanTransfers }()
+
+	total, transfers, err := transferDb.GetAllTransfers(tx, 10, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scan error")
+	assert.Equal(t, 0, total)
+	assert.Nil(t, transfers)
+}
+
+func TestTransferDb_GetAllTransfers_RowScanError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error creating sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	mock.ExpectQuery(`(?i)SELECT\s+.*\s+FROM\s+nft_transfers\s+ORDER BY\s+block_number\s+ASC,.*LIMIT\s+\?\s+OFFSET\s+\?`).WillReturnRows(
+		sqlmock.NewRows([]string{"block_number", "transaction_index", "log_index", "tx_hash", "event_name", "from_address", "to_address", "contract", "token_id", "token_unique_id", "block_time", "transfer_type"}).
+			AddRow(1, 1, 1, "0x1", "Mint", "0x1", "0x2", "0x3", "100", "100", 1000, "MINT").
+			RowError(0, errors.New("row scan error")),
+	)
+
+	transferDb := NewTransferDb()
+
+	total, transfers, err := transferDb.GetAllTransfers(tx, 10, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "row scan error")
+	assert.Equal(t, 0, total)
+	assert.Nil(t, transfers)
+}
+
 func TestTransferDb_GetAllTransfers_TotalError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -696,6 +752,69 @@ func TestTransferDb_GetTransfersForContract_QueryError(t *testing.T) {
 	total, transfers, err := transferDb.GetTransfersForContract(tx, "0xabc", 10, 1)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "query error")
+	assert.Equal(t, 0, total)
+	assert.Nil(t, transfers)
+}
+
+func TestTransferDb_GetTransfersForContract_ScanError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err, "error creating sqlmock")
+	defer db.Close()
+
+	mock.ExpectBegin()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+
+	mock.ExpectQuery(`(?i)SELECT\s+.*\s+FROM\s+nft_transfers\s+WHERE\s+contract\s+=\s+\?\s+ORDER\s+BY\s+block_number\s+ASC,\s+transaction_index\s+ASC,\s+log_index\s+ASC\s+LIMIT\s+\?\s+OFFSET\s+\?`).
+		WillReturnRows(
+			sqlmock.NewRows([]string{
+				"block_number", "transaction_index", "log_index",
+				"tx_hash", "event_name", "from_address", "to_address",
+				"contract", "token_id", "token_unique_id", "block_time", "transfer_type"}).
+				AddRow(1, 1, 1, "0xhash1", "Mint", "0xfrom", "0xto", "0xabc", "100", 1, 123456, "MINT"),
+		)
+
+	transferDb := NewTransferDb()
+
+	originalScanTransfers := scanTransfers
+	scanTransfers = func(rows *sql.Rows) ([]NFTTransfer, error) {
+		return nil, errors.New("scan error")
+	}
+	defer func() { scanTransfers = originalScanTransfers }()
+
+	total, transfers, err := transferDb.GetTransfersForContract(tx, "0xabc", 10, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scan error")
+	assert.Equal(t, 0, total)
+	assert.Nil(t, transfers)
+}
+
+func TestTransferDb_GetTransfersForContract_RowScanError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err, "error creating sqlmock")
+	defer db.Close()
+
+	mock.ExpectBegin()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+
+	mock.ExpectQuery(`(?i)SELECT\s+.*\s+FROM\s+nft_transfers\s+WHERE\s+contract\s+=\s+\?\s+ORDER\s+BY\s+block_number\s+ASC,\s+transaction_index\s+ASC,\s+log_index\s+ASC\s+LIMIT\s+\?\s+OFFSET\s+\?`).
+		WillReturnRows(
+			sqlmock.NewRows([]string{
+				"block_number", "transaction_index", "log_index",
+				"tx_hash", "event_name", "from_address", "to_address",
+				"contract", "token_id", "token_unique_id", "block_time", "transfer_type"}).
+				AddRow(1, 1, 1, "0xhash1", "Mint", "0xfrom", "0xto", "0xabc", "100", 1, 123456, "MINT").
+				RowError(0, errors.New("row scan error")),
+		)
+
+	transferDb := NewTransferDb()
+
+	total, transfers, err := transferDb.GetTransfersForContract(tx, "0xabc", 10, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "row scan error")
 	assert.Equal(t, 0, total)
 	assert.Nil(t, transfers)
 }
@@ -808,6 +927,69 @@ func TestTransferDb_GetTransfersForTxHash_QueryError(t *testing.T) {
 	total, transfers, err := transferDb.GetTransfersForTxHash(tx, "0xhash", 10, 1)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "query error")
+	assert.Equal(t, 0, total)
+	assert.Nil(t, transfers)
+}
+
+func TestTransferDb_GetTransfersForTxHash_ScanError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	mock.ExpectBegin()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+
+	mock.ExpectQuery(`(?i)SELECT\s+.*\s+FROM\s+nft_transfers\s+WHERE\s+tx_hash\s+=\s+\?\s+ORDER\s+BY\s+block_number\s+ASC,\s+transaction_index\s+ASC,\s+log_index\s+ASC\s+LIMIT\s+\?\s+OFFSET\s+\?`).
+		WillReturnRows(
+			sqlmock.NewRows([]string{
+				"block_number", "transaction_index", "log_index",
+				"tx_hash", "event_name", "from_address", "to_address",
+				"contract", "token_id", "token_unique_id", "block_time", "transfer_type"}).
+				AddRow(10, 1, 0, "0xhash", "Transfer", "0xfrom", "0xto", "0xabc", "101", 1, 345678, "SEND"),
+		)
+
+	transferDb := NewTransferDb()
+
+	originalScanTransfers := scanTransfers
+	scanTransfers = func(rows *sql.Rows) ([]NFTTransfer, error) {
+		return nil, errors.New("scan error")
+	}
+	defer func() { scanTransfers = originalScanTransfers }()
+
+	total, transfers, err := transferDb.GetTransfersForTxHash(tx, "0xhash", 10, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scan error")
+	assert.Equal(t, 0, total)
+	assert.Nil(t, transfers)
+}
+
+func TestTransferDb_GetTransfersForTxHash_RowScanError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	mock.ExpectBegin()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+
+	mock.ExpectQuery(`(?i)SELECT\s+.*\s+FROM\s+nft_transfers\s+WHERE\s+tx_hash\s+=\s+\?\s+ORDER\s+BY\s+block_number\s+ASC,\s+transaction_index\s+ASC,\s+log_index\s+ASC\s+LIMIT\s+\?\s+OFFSET\s+\?`).
+		WillReturnRows(
+			sqlmock.NewRows([]string{
+				"block_number", "transaction_index", "log_index",
+				"tx_hash", "event_name", "from_address", "to_address",
+				"contract", "token_id", "token_unique_id", "block_time", "transfer_type"}).
+				AddRow(10, 1, 0, "0xhash", "Transfer", "0xfrom", "0xto", "0xabc", "101", 1, 345678, "SEND").
+				RowError(0, errors.New("row scan error")),
+		)
+
+	transferDb := NewTransferDb()
+
+	total, transfers, err := transferDb.GetTransfersForTxHash(tx, "0xhash", 10, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "row scan error")
 	assert.Equal(t, 0, total)
 	assert.Nil(t, transfers)
 }
