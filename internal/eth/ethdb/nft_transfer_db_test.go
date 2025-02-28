@@ -14,9 +14,9 @@ import (
 
 // setupTestTransferDb sets up a fresh DB, returns:
 //   - db:      *sql.DB
-//   - transferDb: TransferDb (the SUT)
+//   - transferDb: NFTTransferDb (the SUT)
 //   - cleanup: function to close DB and clean up
-func setupTestTransferDb(t *testing.T) (*sql.DB, TransferDb, func()) {
+func setupTestTransferDb(t *testing.T) (*sql.DB, NFTTransferDb, func()) {
 	db, cleanup := testdb.SetupTestDB(t)
 
 	transferDb := NewTransferDb()

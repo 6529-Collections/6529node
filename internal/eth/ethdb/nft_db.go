@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/6529-Collections/6529node/internal/db"
 	"go.uber.org/zap"
 )
 
@@ -17,8 +18,9 @@ type NFTDb interface {
 	UpdateSupplyReverse(txn *sql.Tx, contract string, tokenID string) (supply uint64, err error)
 	UpdateBurntSupplyReverse(txn *sql.Tx, contract string, tokenID string) error
 
-	// GetNft returns an NFT by contract and tokenID.
-	GetNft(txn *sql.Tx, contract string, tokenID string) (*NFT, error)
+	GetAllNfts(rq db.QueryRunner, pageSize int, page int) (total int, nfts []NFT, err error)
+	GetNftsForContract(rq db.QueryRunner, contract string, pageSize int, page int) (total int, nfts []NFT, err error)
+	GetNft(rq db.QueryRunner, contract string, tokenID string) (*NFT, error)
 }
 
 func NewNFTDb() NFTDb {
@@ -26,6 +28,11 @@ func NewNFTDb() NFTDb {
 }
 
 type NFTDbImpl struct{}
+
+const allNftsQuery = `
+	SELECT contract, token_id, supply, burnt_supply
+	FROM nfts
+`
 
 // UpdateSupply increments the supply by 1. If the NFT doesn't exist, it is created with supply = 1.
 func (n *NFTDbImpl) UpdateSupply(txn *sql.Tx, contract, tokenID string) (supply uint64, err error) {
@@ -104,10 +111,71 @@ func (n *NFTDbImpl) UpdateBurntSupplyReverse(txn *sql.Tx, contract, tokenID stri
 	return err
 }
 
-// GetNft returns an NFT by contract and tokenID.
-func (n *NFTDbImpl) GetNft(tx *sql.Tx, contract string, tokenID string) (*NFT, error) {
+func (n *NFTDbImpl) GetAllNfts(rq db.QueryRunner, pageSize int, page int) (total int, nfts []NFT, err error) {
+	offset := (page - 1) * pageSize
+
+	rows, err := rq.Query(allNftsQuery+`
+		ORDER BY contract ASC, token_id ASC LIMIT ? OFFSET ?
+    `, pageSize, offset)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var nft NFT
+		if err := rows.Scan(&nft.Contract, &nft.TokenID, &nft.Supply, &nft.BurntSupply); err != nil {
+			return 0, nil, err
+		}
+		nfts = append(nfts, nft)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, nil, err
+	}
+
+	err = rq.QueryRow("SELECT COUNT(*) FROM nfts").Scan(&total)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	return total, nfts, nil
+}
+
+func (n *NFTDbImpl) GetNftsForContract(rq db.QueryRunner, contract string, pageSize int, page int) (total int, nfts []NFT, err error) {
+	offset := (page - 1) * pageSize
+
+	rows, err := rq.Query(allNftsQuery+`
+		WHERE contract = ?
+		ORDER BY contract ASC, token_id ASC LIMIT ? OFFSET ?
+	`, contract, pageSize, offset)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var nft NFT
+		if err := rows.Scan(&nft.TokenID, &nft.Contract, &nft.Supply, &nft.BurntSupply); err != nil {
+			return 0, nil, err
+		}
+		nfts = append(nfts, nft)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, nil, err
+	}
+
+	err = rq.QueryRow("SELECT COUNT(*) FROM nfts WHERE contract = ?", contract).Scan(&total)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	return total, nfts, nil
+
+}
+
+func (n *NFTDbImpl) GetNft(rq db.QueryRunner, contract string, tokenID string) (*NFT, error) {
 	var nft NFT
-	err := tx.QueryRow("SELECT supply, burnt_supply FROM nfts WHERE contract = ? AND token_id = ?", contract, tokenID).Scan(&nft.Supply, &nft.BurntSupply)
+	err := rq.QueryRow("SELECT contract, token_id, supply, burnt_supply FROM nfts WHERE contract = ? AND token_id = ?", contract, tokenID).Scan(&nft.Contract, &nft.TokenID, &nft.Supply, &nft.BurntSupply)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("NFT not found: contract=%s tokenID=%s", contract, tokenID)
 	}

@@ -31,7 +31,7 @@ func OpenSqlite(path string) (*sql.DB, error) {
 
 	_, err = db.Exec(`
 		PRAGMA journal_mode = WAL;
-		PRAGMA synchronous = NORMAL;
+		PRAGMA synchronous = EXTRA;
 		PRAGMA cache_size = -2000;
 		PRAGMA busy_timeout = 5000;
 		PRAGMA foreign_keys = ON;
@@ -90,7 +90,8 @@ func migrateDatabase(db *sql.DB) error {
 	return nil
 }
 
-type RowQuerier interface {
+type QueryRunner interface {
+	Query(query string, args ...interface{}) (*sql.Rows, error)
 	QueryRow(query string, args ...interface{}) *sql.Row
 }
 
@@ -113,9 +114,18 @@ func TxRunner[T any](ctx context.Context, db *sql.DB, fn func(*sql.Tx) (T, error
 		}
 	}()
 
+	// Execute the user-defined function
 	result, err = fn(tx)
 	if err != nil {
 		return result, fmt.Errorf("failed to execute transaction: %w", err)
 	}
+
+	// Check if context was canceled after fn completed
+	if ctx.Err() != nil {
+		// This ensures we don't commit if the context is already canceled
+		err = ctx.Err()
+		return result, fmt.Errorf("context canceled before commit: %w", err)
+	}
+
 	return result, nil
 }

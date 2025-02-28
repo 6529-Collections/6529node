@@ -9,11 +9,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestStartRPCServer_StartAndClose(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to open ephemeral port: %v", err)
@@ -24,7 +33,7 @@ func TestStartRPCServer_StartAndClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	closeFunc := StartRPCServer(port, ctx)
+	closeFunc := StartRPCServer(port, db, ctx)
 	defer closeFunc()
 
 	time.Sleep(100 * time.Millisecond)
@@ -64,6 +73,13 @@ func TestStartRPCServer_StartAndClose(t *testing.T) {
 }
 
 func TestStartRPCServer_InvalidRoute(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to open ephemeral port: %v", err)
@@ -74,7 +90,7 @@ func TestStartRPCServer_InvalidRoute(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	closeFunc := StartRPCServer(port, ctx)
+	closeFunc := StartRPCServer(port, db, ctx)
 	defer closeFunc()
 
 	time.Sleep(100 * time.Millisecond)
@@ -94,6 +110,13 @@ func TestStartRPCServer_InvalidRoute(t *testing.T) {
 }
 
 func TestResponseWriter_StatusCodeCapture(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
 	core, logs := observer.New(zap.InfoLevel)
 	testLogger := zap.New(core)
 	originalLogger := zap.L()
@@ -110,7 +133,7 @@ func TestResponseWriter_StatusCodeCapture(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	closeFunc := StartRPCServer(port, ctx)
+	closeFunc := StartRPCServer(port, db, ctx)
 	defer closeFunc()
 
 	// Give the server time to start
@@ -169,6 +192,13 @@ func TestResponseWriter_StatusCodeCapture(t *testing.T) {
 }
 
 func TestServer_ConcurrentRequests(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to open ephemeral port: %v", err)
@@ -179,7 +209,7 @@ func TestServer_ConcurrentRequests(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	closeFunc := StartRPCServer(port, ctx)
+	closeFunc := StartRPCServer(port, db, ctx)
 	defer closeFunc()
 
 	// Give the server a moment to start

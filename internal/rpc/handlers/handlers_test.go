@@ -15,7 +15,7 @@ import (
 
 var globalLoggerReplaceMu sync.Mutex
 
-func TestCreateApiV1Path(t *testing.T) {
+func TestCreateApiPath(t *testing.T) {
 	testCases := []struct {
 		name  string
 		input string
@@ -29,7 +29,7 @@ func TestCreateApiV1Path(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := CreateApiV1Path(tc.input)
+			got := CreateApiPath(ApiV1, tc.input)
 			if got != tc.want {
 				t.Errorf("expected %q, got %q", tc.want, got)
 			}
@@ -43,7 +43,7 @@ func TestSetupHandlers_ValidMethod(t *testing.T) {
 	}
 
 	handlersMap := MethodHandlers{
-		CreateApiV1Path("test"): {
+		CreateApiPath(ApiV1, "test"): {
 			HTTP_GET: testHandler,
 		},
 	}
@@ -76,7 +76,7 @@ func TestSetupHandlers_ValidMethod(t *testing.T) {
 
 func TestSetupHandlers_MethodNotAllowed(t *testing.T) {
 	handlersMap := MethodHandlers{
-		CreateApiV1Path("unsupportedMethod"): {
+		CreateApiPath(ApiV1, "unsupportedMethod"): {
 			HTTP_GET: func(r *http.Request) (any, error) {
 				return map[string]string{"message": "only GET is supported"}, nil
 			},
@@ -112,7 +112,7 @@ func TestSetupHandlers_HandlerError(t *testing.T) {
 	}
 
 	handlersMap := MethodHandlers{
-		CreateApiV1Path("errorTest"): {
+		CreateApiPath(ApiV1, "errorTest"): {
 			HTTP_GET: testHandler,
 		},
 	}
@@ -141,7 +141,7 @@ func TestSetupHandlers_NilResponse(t *testing.T) {
 	}
 
 	handlersMap := MethodHandlers{
-		CreateApiV1Path("nilResponse"): {
+		CreateApiPath(ApiV1, "nilResponse"): {
 			HTTP_GET: testHandler,
 		},
 	}
@@ -182,7 +182,7 @@ func TestSetupHandlers_JsonEncodingError(t *testing.T) {
 	}
 
 	handlersMap := MethodHandlers{
-		CreateApiV1Path("encodingError"): {
+		CreateApiPath(ApiV1, "encodingError"): {
 			HTTP_GET: testHandler,
 		},
 	}
@@ -227,7 +227,7 @@ func TestSetupHandlers_ConcurrentRequests(t *testing.T) {
 	}
 
 	handlersMap := MethodHandlers{
-		CreateApiV1Path("concurrentTest"): {
+		CreateApiPath(ApiV1, "concurrentTest"): {
 			HTTP_GET: testHandler,
 		},
 	}

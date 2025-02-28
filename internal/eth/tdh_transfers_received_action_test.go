@@ -22,8 +22,8 @@ import (
 type testDefaultTdhTransfersReceivedActionDeps struct {
 	db              *sql.DB
 	progressTracker ethdb.TdhIdxTrackerDb
-	transferDb      ethdb.TransferDb
-	ownerDb         ethdb.OwnerDb
+	transferDb      ethdb.NFTTransferDb
+	ownerDb         ethdb.NFTOwnerDb
 	nftDb           ethdb.NFTDb
 	cleanup         func()
 }
@@ -87,7 +87,9 @@ type mockNFTDb struct {
 	UpdateBurntSupplyFn    func(txn *sql.Tx, contract, tokenID string) error
 	UpdateSupplyReverseFn  func(txn *sql.Tx, contract, tokenID string) (uint64, error)
 	UpdateBurntSupplyRevFn func(txn *sql.Tx, contract, tokenID string) error
-	GetNftFn               func(txn *sql.Tx, contract, tokenID string) (*ethdb.NFT, error)
+	GetNftFn               func(rq db.QueryRunner, contract, tokenID string) (*ethdb.NFT, error)
+	GetAllNftsFn           func(rq db.QueryRunner, pageSize int, page int) (total int, nfts []ethdb.NFT, err error)
+	GetNftsForContractFn   func(rq db.QueryRunner, contract string, pageSize int, page int) (total int, nfts []ethdb.NFT, err error)
 }
 
 func (m *mockNFTDb) UpdateSupply(txn *sql.Tx, contract, tokenID string) (uint64, error) {
@@ -102,15 +104,24 @@ func (m *mockNFTDb) UpdateSupplyReverse(txn *sql.Tx, contract, tokenID string) (
 func (m *mockNFTDb) UpdateBurntSupplyReverse(txn *sql.Tx, contract, tokenID string) error {
 	return m.UpdateBurntSupplyRevFn(txn, contract, tokenID)
 }
-func (m *mockNFTDb) GetNft(txn *sql.Tx, contract, tokenID string) (*ethdb.NFT, error) {
-	return m.GetNftFn(txn, contract, tokenID)
+func (m *mockNFTDb) GetNft(rq db.QueryRunner, contract, tokenID string) (*ethdb.NFT, error) {
+	return m.GetNftFn(rq, contract, tokenID)
+}
+func (m *mockNFTDb) GetAllNfts(rq db.QueryRunner, pageSize int, page int) (total int, nfts []ethdb.NFT, err error) {
+	return m.GetAllNftsFn(rq, pageSize, page)
+}
+func (m *mockNFTDb) GetNftsForContract(rq db.QueryRunner, contract string, pageSize int, page int) (total int, nfts []ethdb.NFT, err error) {
+	return m.GetNftsForContractFn(rq, contract, pageSize, page)
 }
 
 type mockOwnerDb struct {
-	GetUniqueIDFn        func(txn *sql.Tx, contract, tokenID, address string) (uint64, error)
-	UpdateOwnershipFn    func(txn *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error
-	UpdateOwnershipRevFn func(txn *sql.Tx, transfer ethdb.NFTTransfer, tokenUniqueID uint64) error
-	GetBalanceFn         func(txn *sql.Tx, owner, contract, tokenID string) (uint64, error)
+	GetUniqueIDFn               func(txn *sql.Tx, contract, tokenID, address string) (uint64, error)
+	UpdateOwnershipFn           func(txn *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error
+	UpdateOwnershipRevFn        func(txn *sql.Tx, transfer ethdb.NFTTransfer, tokenUniqueID uint64) error
+	GetBalanceFn                func(txn *sql.Tx, owner, contract, tokenID string) (uint64, error)
+	GetAllOwnersFn              func(rq db.QueryRunner, pageSize int, page int) (total int, owners []ethdb.NFTOwner, err error)
+	GetOwnersForContractFn      func(rq db.QueryRunner, contract string, pageSize int, page int) (total int, owners []ethdb.NFTOwner, err error)
+	GetOwnersForContractTokenFn func(rq db.QueryRunner, contract string, tokenID string, pageSize int, page int) (total int, owners []ethdb.NFTOwner, err error)
 }
 
 func (m *mockOwnerDb) GetUniqueID(txn *sql.Tx, contract, tokenID, address string) (uint64, error) {
@@ -125,12 +136,25 @@ func (m *mockOwnerDb) UpdateOwnershipReverse(txn *sql.Tx, transfer ethdb.NFTTran
 func (m *mockOwnerDb) GetBalance(txn *sql.Tx, owner, contract, tokenID string) (uint64, error) {
 	return m.GetBalanceFn(txn, owner, contract, tokenID)
 }
+func (m *mockOwnerDb) GetAllOwners(rq db.QueryRunner, pageSize int, page int) (total int, owners []ethdb.NFTOwner, err error) {
+	return m.GetAllOwnersFn(rq, pageSize, page)
+}
+func (m *mockOwnerDb) GetOwnersForContract(rq db.QueryRunner, contract string, pageSize int, page int) (total int, owners []ethdb.NFTOwner, err error) {
+	return m.GetOwnersForContractFn(rq, contract, pageSize, page)
+}
+func (m *mockOwnerDb) GetOwnersForContractToken(rq db.QueryRunner, contract string, tokenID string, pageSize int, page int) (total int, owners []ethdb.NFTOwner, err error) {
+	return m.GetOwnersForContractTokenFn(rq, contract, tokenID, pageSize, page)
+}
 
 type mockTransferDb struct {
-	StoreTransferFn               func(tx *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error
-	DeleteTransferFn              func(tx *sql.Tx, transfer ethdb.NFTTransfer, tokenUniqueID uint64) error
-	GetTransfersAfterCheckpointFn func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error)
-	GetLatestTransferFn           func(tx *sql.Tx) (*ethdb.NFTTransfer, error)
+	StoreTransferFn                func(tx *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error
+	DeleteTransferFn               func(tx *sql.Tx, transfer ethdb.NFTTransfer, tokenUniqueID uint64) error
+	GetTransfersAfterCheckpointFn  func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]ethdb.NFTTransfer, error)
+	GetLatestTransferFn            func(tx *sql.Tx) (*ethdb.NFTTransfer, error)
+	GetAllTransfersFn              func(rq db.QueryRunner, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error)
+	GetTransfersForContractFn      func(rq db.QueryRunner, contract string, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error)
+	GetTransfersForContractTokenFn func(rq db.QueryRunner, contract string, tokenID string, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error)
+	GetTransfersForTxHashFn        func(rq db.QueryRunner, txHash string, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error)
 }
 
 func (m *mockTransferDb) StoreTransfer(tx *sql.Tx, transfer models.TokenTransfer, tokenUniqueID uint64) error {
@@ -145,13 +169,25 @@ func (m *mockTransferDb) DeleteTransfer(tx *sql.Tx, transfer ethdb.NFTTransfer, 
 func (m *mockTransferDb) GetLatestTransfer(tx *sql.Tx) (*ethdb.NFTTransfer, error) {
 	return m.GetLatestTransferFn(tx)
 }
+func (m *mockTransferDb) GetAllTransfers(rq db.QueryRunner, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error) {
+	return m.GetAllTransfersFn(rq, pageSize, page)
+}
+func (m *mockTransferDb) GetTransfersForContract(rq db.QueryRunner, contract string, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error) {
+	return m.GetTransfersForContractFn(rq, contract, pageSize, page)
+}
+func (m *mockTransferDb) GetTransfersForContractToken(rq db.QueryRunner, contract string, tokenID string, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error) {
+	return m.GetTransfersForContractTokenFn(rq, contract, tokenID, pageSize, page)
+}
+func (m *mockTransferDb) GetTransfersForTxHash(rq db.QueryRunner, txHash string, pageSize int, page int) (total int, transfers []ethdb.NFTTransfer, err error) {
+	return m.GetTransfersForTxHashFn(rq, txHash, pageSize, page)
+}
 
 // Utility to quickly create the DefaultTdhTransfersReceivedAction with mocks:
 func newActionWithMocks(
 	t *testing.T,
 	nftDb ethdb.NFTDb,
-	ownerDb ethdb.OwnerDb,
-	transferDb ethdb.TransferDb,
+	ownerDb ethdb.NFTOwnerDb,
+	transferDb ethdb.NFTTransferDb,
 	trackerDb ethdb.TdhIdxTrackerDb,
 ) *DefaultTdhTransfersReceivedAction {
 	ctx := context.Background()
@@ -164,7 +200,7 @@ func newActionWithMocks(
 	require.NoError(t, err, "Should open an in-memory DB for the test")
 
 	originalGetLastSavedCheckpoint := getLastSavedCheckpoint
-	getLastSavedCheckpoint = func(q db.RowQuerier) (uint64, uint64, uint64, error) {
+	getLastSavedCheckpoint = func(q db.QueryRunner) (uint64, uint64, uint64, error) {
 		return 0, 0, 0, nil
 	}
 
@@ -596,7 +632,7 @@ func TestNewTdhTransfersReceivedActionImpl_CheckpointError(t *testing.T) {
 
 	// Override getLastSavedCheckpoint to simulate an error.
 	origGetCheckpoint := getLastSavedCheckpoint
-	getLastSavedCheckpoint = func(q db.RowQuerier) (uint64, uint64, uint64, error) {
+	getLastSavedCheckpoint = func(q db.QueryRunner) (uint64, uint64, uint64, error) {
 		return 0, 0, 0, errors.New("checkpoint error")
 	}
 	defer func() { getLastSavedCheckpoint = origGetCheckpoint }()
@@ -624,7 +660,7 @@ func TestNewTdhTransfersReceivedActionImpl_Success(t *testing.T) {
 	defer deps.cleanup()
 
 	origGetCheckpoint := getLastSavedCheckpoint
-	getLastSavedCheckpoint = func(q db.RowQuerier) (uint64, uint64, uint64, error) {
+	getLastSavedCheckpoint = func(q db.QueryRunner) (uint64, uint64, uint64, error) {
 		return 100, 1, 2, nil
 	}
 	defer func() { getLastSavedCheckpoint = origGetCheckpoint }()
@@ -1175,7 +1211,7 @@ func TestDefaultTdhTransfersReceivedAction_Handle_ErrorGetLastSavedCheckpoint(t 
 
 	// We'll override getLastSavedCheckpoint to return an error:
 	origGetLastSavedCheckpoint := getLastSavedCheckpoint
-	getLastSavedCheckpoint = func(q db.RowQuerier) (uint64, uint64, uint64, error) {
+	getLastSavedCheckpoint = func(q db.QueryRunner) (uint64, uint64, uint64, error) {
 		return 0, 0, 0, errors.New("forced checkpoint error")
 	}
 	defer func() { getLastSavedCheckpoint = origGetLastSavedCheckpoint }()
@@ -1205,7 +1241,7 @@ func TestDefaultTdhTransfersReceivedAction_Handle_ErrorFromReset(t *testing.T) {
 	// We'll force a mismatch so that reset is called. Then inside reset, we force an error.
 	// Suppose the last saved checkpoint is block=200. We'll override getLastSavedCheckpoint:
 	origGetLastSavedCheckpoint := getLastSavedCheckpoint
-	getLastSavedCheckpoint = func(q db.RowQuerier) (uint64, uint64, uint64, error) {
+	getLastSavedCheckpoint = func(q db.QueryRunner) (uint64, uint64, uint64, error) {
 		return 200, 0, 0, nil
 	}
 	defer func() { getLastSavedCheckpoint = origGetLastSavedCheckpoint }()

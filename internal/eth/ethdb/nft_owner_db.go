@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/6529-Collections/6529node/internal/db"
 	"github.com/6529-Collections/6529node/pkg/tdh/models"
 )
 
-type OwnerDb interface {
+type NFTOwnerDb interface {
 	GetUniqueID(txn *sql.Tx, contract, tokenID string, address string) (uint64, error)
 
 	// Forward direction: from -> to
@@ -19,13 +20,22 @@ type OwnerDb interface {
 
 	// GetBalance retrieves the balance of an owner for a specific NFT.
 	GetBalance(txn *sql.Tx, owner string, contract string, tokenID string) (uint64, error)
+
+	GetAllOwners(rq db.QueryRunner, pageSize int, page int) (total int, owners []NFTOwner, err error)
+	GetOwnersForContract(rq db.QueryRunner, contract string, pageSize int, page int) (total int, owners []NFTOwner, err error)
+	GetOwnersForContractToken(rq db.QueryRunner, contract string, tokenID string, pageSize int, page int) (total int, owners []NFTOwner, err error)
 }
 
-func NewOwnerDb() OwnerDb {
+func NewOwnerDb() NFTOwnerDb {
 	return &OwnerDbImpl{}
 }
 
 type OwnerDbImpl struct{}
+
+const allOwnersQuery = `
+	SELECT owner, contract, token_id, token_unique_id, timestamp
+	FROM nft_owners
+`
 
 // GetUniqueID retrieves the unique ID of an NFT for a specific address.
 func (o *OwnerDbImpl) GetUniqueID(txn *sql.Tx, contract, tokenID string, address string) (uint64, error) {
@@ -109,4 +119,90 @@ func (o *OwnerDbImpl) GetBalance(tx *sql.Tx, owner, contract, tokenID string) (u
 	}
 
 	return balance, nil
+}
+
+func (o *OwnerDbImpl) GetAllOwners(rq db.QueryRunner, pageSize int, page int) (total int, owners []NFTOwner, err error) {
+	offset := (page - 1) * pageSize
+
+	rows, err := rq.Query(allOwnersQuery+`
+		ORDER BY contract ASC, token_id ASC, token_unique_id ASC LIMIT ? OFFSET ?
+	`, pageSize, offset)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var owner NFTOwner
+		err := rows.Scan(&owner.Owner, &owner.Contract, &owner.TokenID, &owner.TokenUniqueID, &owner.Timestamp)
+		if err != nil {
+			return 0, nil, err
+		}
+		owners = append(owners, owner)
+	}
+
+	err = rq.QueryRow("SELECT COUNT(*) FROM nft_owners").Scan(&total)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	return total, owners, nil
+}
+
+func (o *OwnerDbImpl) GetOwnersForContract(rq db.QueryRunner, contract string, pageSize int, page int) (total int, owners []NFTOwner, err error) {
+	offset := (page - 1) * pageSize
+
+	rows, err := rq.Query(allOwnersQuery+`
+		WHERE contract = ?
+		ORDER BY contract ASC, token_id ASC, token_unique_id ASC LIMIT ? OFFSET ?
+	`, contract, pageSize, offset)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var owner NFTOwner
+		err := rows.Scan(&owner.Owner, &owner.Contract, &owner.TokenID, &owner.TokenUniqueID, &owner.Timestamp)
+		if err != nil {
+			return 0, nil, err
+		}
+		owners = append(owners, owner)
+	}
+
+	err = rq.QueryRow("SELECT COUNT(*) FROM nft_owners WHERE contract = ?", contract).Scan(&total)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	return total, owners, nil
+}
+
+func (o *OwnerDbImpl) GetOwnersForContractToken(rq db.QueryRunner, contract string, tokenID string, pageSize int, page int) (total int, owners []NFTOwner, err error) {
+	offset := (page - 1) * pageSize
+
+	rows, err := rq.Query(allOwnersQuery+`
+		WHERE contract = ? AND token_id = ?
+		ORDER BY contract ASC, token_id ASC, token_unique_id ASC LIMIT ? OFFSET ?
+	`, contract, tokenID, pageSize, offset)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var owner NFTOwner
+		err := rows.Scan(&owner.Owner, &owner.Contract, &owner.TokenID, &owner.TokenUniqueID, &owner.Timestamp)
+		if err != nil {
+			return 0, nil, err
+		}
+		owners = append(owners, owner)
+	}
+
+	err = rq.QueryRow("SELECT COUNT(*) FROM nft_owners WHERE contract = ? AND token_id = ?", contract, tokenID).Scan(&total)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	return total, owners, nil
 }
