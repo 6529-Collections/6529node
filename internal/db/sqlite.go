@@ -129,3 +129,7 @@ func TxRunner[T any](ctx context.Context, db *sql.DB, fn func(*sql.Tx) (T, error
 
 	return result, nil
 }
+
+type RowScanner interface {
+	Scan(dest ...interface{}) error
+}

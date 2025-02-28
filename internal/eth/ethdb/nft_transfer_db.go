@@ -74,8 +74,16 @@ func (t *TransferDbImpl) GetLatestTransfer(tx *sql.Tx) (*NFTTransfer, error) {
 	row := tx.QueryRow(allTransfersQuery + `
 		ORDER BY block_number DESC, transaction_index DESC, log_index DESC LIMIT 1`)
 
+	transfer, err := scanTransfer(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return transfer, err
+}
+
+func scanTransfer(scanner db.RowScanner) (*NFTTransfer, error) {
 	var transfer NFTTransfer
-	err := row.Scan(
+	err := scanner.Scan(
 		&transfer.BlockNumber, &transfer.TransactionIndex, &transfer.LogIndex,
 		&transfer.TxHash, &transfer.EventName, &transfer.From, &transfer.To,
 		&transfer.Contract, &transfer.TokenID, &transfer.TokenUniqueID, &transfer.BlockTime, &transfer.Type,
@@ -86,20 +94,14 @@ func (t *TransferDbImpl) GetLatestTransfer(tx *sql.Tx) (*NFTTransfer, error) {
 	return &transfer, err
 }
 
-// scanTransfers is a helper to parse SQL rows into a slice of TokenTransfers.
 func scanTransfers(rows *sql.Rows) ([]NFTTransfer, error) {
 	var transfers []NFTTransfer
 	for rows.Next() {
-		var transfer NFTTransfer
-		err := rows.Scan(
-			&transfer.BlockNumber, &transfer.TransactionIndex, &transfer.LogIndex,
-			&transfer.TxHash, &transfer.EventName, &transfer.From, &transfer.To,
-			&transfer.Contract, &transfer.TokenID, &transfer.TokenUniqueID, &transfer.BlockTime, &transfer.Type,
-		)
+		transfer, err := scanTransfer(rows)
 		if err != nil {
 			return nil, err
 		}
-		transfers = append(transfers, transfer)
+		transfers = append(transfers, *transfer)
 	}
 	return transfers, nil
 }
@@ -116,19 +118,13 @@ func (t *TransferDbImpl) GetAllTransfers(rq db.QueryRunner, pageSize int, page i
 	}
 	defer rows.Close()
 
-	for rows.Next() {
-		var transfer NFTTransfer
-		err := rows.Scan(
-			&transfer.BlockNumber, &transfer.TransactionIndex, &transfer.LogIndex,
-			&transfer.TxHash, &transfer.EventName, &transfer.From, &transfer.To,
-			&transfer.Contract, &transfer.TokenID, &transfer.TokenUniqueID, &transfer.BlockTime, &transfer.Type,
-		)
-		if err != nil {
-			return 0, nil, err
-		}
-		transfers = append(transfers, transfer)
+	transfers, err = scanTransfers(rows)
+	if err != nil {
+		return 0, nil, err
 	}
-	if err := rows.Err(); err != nil {
+
+	err = rows.Err()
+	if err != nil {
 		return 0, nil, err
 	}
 
@@ -153,19 +149,13 @@ func (t *TransferDbImpl) GetTransfersForContract(rq db.QueryRunner, contract str
 	}
 	defer rows.Close()
 
-	for rows.Next() {
-		var transfer NFTTransfer
-		err := rows.Scan(
-			&transfer.BlockNumber, &transfer.TransactionIndex, &transfer.LogIndex,
-			&transfer.TxHash, &transfer.EventName, &transfer.From, &transfer.To,
-			&transfer.Contract, &transfer.TokenID, &transfer.TokenUniqueID, &transfer.BlockTime, &transfer.Type,
-		)
-		if err != nil {
-			return 0, nil, err
-		}
-		transfers = append(transfers, transfer)
+	transfers, err = scanTransfers(rows)
+	if err != nil {
+		return 0, nil, err
 	}
-	if err := rows.Err(); err != nil {
+
+	err = rows.Err()
+	if err != nil {
 		return 0, nil, err
 	}
 
@@ -190,19 +180,13 @@ func (t *TransferDbImpl) GetTransfersForContractToken(rq db.QueryRunner, contrac
 	}
 	defer rows.Close()
 
-	for rows.Next() {
-		var transfer NFTTransfer
-		err := rows.Scan(
-			&transfer.BlockNumber, &transfer.TransactionIndex, &transfer.LogIndex,
-			&transfer.TxHash, &transfer.EventName, &transfer.From, &transfer.To,
-			&transfer.Contract, &transfer.TokenID, &transfer.TokenUniqueID, &transfer.BlockTime, &transfer.Type,
-		)
-		if err != nil {
-			return 0, nil, err
-		}
-		transfers = append(transfers, transfer)
+	transfers, err = scanTransfers(rows)
+	if err != nil {
+		return 0, nil, err
 	}
-	if err := rows.Err(); err != nil {
+
+	err = rows.Err()
+	if err != nil {
 		return 0, nil, err
 	}
 
@@ -226,19 +210,13 @@ func (t *TransferDbImpl) GetTransfersForTxHash(rq db.QueryRunner, txHash string,
 	}
 	defer rows.Close()
 
-	for rows.Next() {
-		var transfer NFTTransfer
-		err := rows.Scan(
-			&transfer.BlockNumber, &transfer.TransactionIndex, &transfer.LogIndex,
-			&transfer.TxHash, &transfer.EventName, &transfer.From, &transfer.To,
-			&transfer.Contract, &transfer.TokenID, &transfer.TokenUniqueID, &transfer.BlockTime, &transfer.Type,
-		)
-		if err != nil {
-			return 0, nil, err
-		}
-		transfers = append(transfers, transfer)
+	transfers, err = scanTransfers(rows)
+	if err != nil {
+		return 0, nil, err
 	}
-	if err := rows.Err(); err != nil {
+
+	err = rows.Err()
+	if err != nil {
 		return 0, nil, err
 	}
 
