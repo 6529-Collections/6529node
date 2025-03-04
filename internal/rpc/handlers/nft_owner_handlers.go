@@ -8,11 +8,11 @@ import (
 	"github.com/6529-Collections/6529node/internal/eth/ethdb"
 )
 
-var nftDb ethdb.NFTDb = ethdb.NewNFTDb()
+var ownerDb ethdb.NFTOwnerDb = ethdb.NewOwnerDb()
 
-func NFTsGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
-	// For /api/v1/nfts => parts = ["api","v1","nfts"]
-	// For /api/v1/nfts/ => parts = ["api","v1","nfts"] (the trailing slash is trimmed)
+func NFTOwnersGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
+	// For /api/v1/nft_owners => parts = ["api","v1","nft_owners"]
+	// For /api/v1/nft_owners/ => parts = ["api","v1","nft_owners"] (the trailing slash is trimmed)
 	// For /api/v1/nfts/0xABC/42 => parts = ["api","v1","nfts","0xABC","42"]
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 
@@ -25,16 +25,9 @@ func NFTsGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
 		tokenID = parts[4]
 	}
 
-	// if contract != "" && tokenID != "" {
-	// 	return PaginatedQueryHandler[ethdb.NFT](r, db, nftDb, "contract = ? AND token_id = ?", []interface{}{contract, tokenID})
-	// }
-
-	// if contract != "" {
-	// 	return PaginatedQueryHandler[ethdb.NFT](r, db, nftDb, "contract = ?", []interface{}{contract})
-	// }
-
 	query := ""
 	queryParams := []interface{}{}
+
 	if contract != "" && tokenID != "" {
 		query = "contract = ? AND token_id = ?"
 		queryParams = []interface{}{contract, tokenID}
@@ -43,5 +36,5 @@ func NFTsGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
 		queryParams = []interface{}{contract}
 	}
 
-	return PaginatedQueryHandler[ethdb.NFT](r, db, nftDb, query, queryParams)
+	return PaginatedQueryHandler[ethdb.NFTOwner](r, db, ownerDb, query, queryParams)
 }

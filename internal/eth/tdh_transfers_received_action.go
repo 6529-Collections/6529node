@@ -157,7 +157,7 @@ func (a *DefaultTdhTransfersReceivedAction) reset(
 
 	// 3) Reverse each transfer
 	for _, tr := range transfers {
-		if e := a.applyTransferReverse(tx, tr); e != nil {
+		if e := a.applyTransferReverse(tx, *tr); e != nil {
 			return e
 		}
 	}

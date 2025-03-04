@@ -3,6 +3,7 @@ package ethdb
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -117,7 +118,9 @@ func TestNFTDb_UpdateBurntSupply_NonexistentNft(t *testing.T) {
 	// Double-check
 	txCheck, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
-	_, err = nftDB.GetNft(txCheck, "0xContractD", "TokenD")
+	nft, err := nftDB.GetNft(txCheck, "0xContractD", "TokenD")
+	fmt.Println("hi i am nft", nft)
+	fmt.Println("hi i am err", err)
 	assert.Error(t, err, "Still not found")
 	_ = txCheck.Rollback()
 }

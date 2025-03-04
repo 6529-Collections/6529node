@@ -6,14 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/6529-Collections/6529node/internal/db"
 	"github.com/6529-Collections/6529node/internal/eth/ethdb"
 )
-
-type NFTTransfersResponse struct {
-	PaginatedResponse
-	Data []ethdb.NFTTransfer `json:"data"`
-}
 
 var transferDb ethdb.NFTTransferDb = ethdb.NewTransferDb()
 
@@ -42,49 +36,22 @@ func NFTTransfersGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
 	if txHash != "" {
 		query := "tx_hash = ?"
 		queryParams := []interface{}{txHash}
-		return NFTTransfersQueryHandler(r, db, query, queryParams)
+		return PaginatedQueryHandler[ethdb.NFTTransfer](r, db, transferDb, query, queryParams)
 	}
 
 	if contract != "" && tokenID != "" {
 		query := "contract = ? AND token_id = ?"
 		queryParams := []interface{}{contract, tokenID}
-		return NFTTransfersQueryHandler(r, db, query, queryParams)
+		return PaginatedQueryHandler[ethdb.NFTTransfer](r, db, transferDb, query, queryParams)
 	}
 
 	if contract != "" {
 		query := "contract = ?"
 		queryParams := []interface{}{contract}
-		return NFTTransfersQueryHandler(r, db, query, queryParams)
+		return PaginatedQueryHandler[ethdb.NFTTransfer](r, db, transferDb, query, queryParams)
 	}
 
 	query := ""
 	queryParams := []interface{}{}
-	return NFTTransfersQueryHandler(r, db, query, queryParams)
-}
-
-func NFTTransfersQueryHandler(r *http.Request, rq db.QueryRunner, query string, queryParams []interface{}) (NFTTransfersResponse, error) {
-	page, pageSize, _ := ExtractPagination(r)
-	queryOptions := db.QueryOptions{
-		Where:     query,
-		PageSize:  pageSize,
-		Page:      page,
-		Direction: db.QueryDirectionAsc,
-	}
-
-	total, transfers, err := transferDb.GetPaginatedResponseForQuery(rq, queryOptions, queryParams)
-	if err != nil {
-		return NFTTransfersResponse{}, err
-	}
-
-	resp := NFTTransfersResponse{
-		PaginatedResponse: PaginatedResponse{
-			Page:     page,
-			PageSize: pageSize,
-		},
-		Data: transfers,
-	}
-
-	resp.ReturnPaginatedData(r, total)
-
-	return resp, nil
+	return PaginatedQueryHandler[ethdb.NFTTransfer](r, db, transferDb, query, queryParams)
 }

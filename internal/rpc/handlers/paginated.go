@@ -5,20 +5,23 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+
+	"github.com/6529-Collections/6529node/internal/db"
 )
 
 // PaginatedResponse holds the common pagination fields.
-type PaginatedResponse struct {
+type PaginatedResponse[T any] struct {
 	Page     int     `json:"page"`
 	PageSize int     `json:"page_size"`
 	Total    int     `json:"total"`
 	Prev     *string `json:"prev"`
 	Next     *string `json:"next"`
+	Data     []*T    `json:"data"`
 }
 
 // ReturnPaginatedData populates the total count and constructs absolute URLs
 // for prev and next based on the request's scheme, host, and path.
-func (p *PaginatedResponse) ReturnPaginatedData(r *http.Request, total int) {
+func (p *PaginatedResponse[T]) ReturnPaginatedData(r *http.Request, total int) {
 	p.Total = total
 
 	// Build the base URL (scheme://host/path).
@@ -91,4 +94,36 @@ func ConvertStructToMap(v interface{}) (map[string]interface{}, error) {
 	}
 
 	return result, nil
+}
+
+func PaginatedQueryHandler[T any](
+	r *http.Request,
+	rq db.QueryRunner,
+	pgQuerier db.PaginatedQuerier[T],
+	query string,
+	queryParams []interface{},
+) (PaginatedResponse[T], error) {
+	var zero PaginatedResponse[T]
+
+	page, pageSize, _ := ExtractPagination(r)
+	queryOptions := db.QueryOptions{
+		Where:     query,
+		PageSize:  pageSize,
+		Page:      page,
+		Direction: db.QueryDirectionAsc,
+	}
+
+	total, data, err := pgQuerier.GetPaginatedResponseForQuery(rq, queryOptions, queryParams)
+	if err != nil {
+		return zero, err
+	}
+
+	resp := PaginatedResponse[T]{
+		Page:     page,
+		PageSize: pageSize,
+		Total:    total,
+		Data:     data,
+	}
+	resp.ReturnPaginatedData(r, total)
+	return resp, nil
 }

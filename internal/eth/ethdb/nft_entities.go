@@ -1,6 +1,9 @@
 package ethdb
 
 import (
+	"database/sql"
+
+	"github.com/6529-Collections/6529node/internal/db"
 	"github.com/6529-Collections/6529node/pkg/tdh/models"
 )
 
@@ -11,12 +14,33 @@ type NFT struct {
 	BurntSupply uint64 `json:"burnt_supply"`
 }
 
+func (n *NFT) ScanRow(scanner db.RowScanner) error {
+	err := scanner.Scan(
+		&n.Contract, &n.TokenID, &n.Supply, &n.BurntSupply,
+	)
+	if err == sql.ErrNoRows {
+		// For a no-rows situation, you might choose to return nil or a custom error.
+		return nil
+	}
+	return err
+}
+
 type NFTOwner struct {
 	Owner         string `json:"owner"`
 	Contract      string `json:"contract"`
 	TokenID       string `json:"token_id"`
 	TokenUniqueID uint64 `json:"token_unique_id"`
 	Timestamp     uint64 `json:"timestamp"`
+}
+
+func (o *NFTOwner) ScanRow(scanner db.RowScanner) error {
+	err := scanner.Scan(
+		&o.Owner, &o.Contract, &o.TokenID, &o.TokenUniqueID, &o.Timestamp,
+	)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	return err
 }
 
 type NFTTransfer struct {
@@ -32,6 +56,18 @@ type NFTTransfer struct {
 	TokenID          string              `json:"token_id"`
 	TokenUniqueID    uint64              `json:"token_unique_id"`
 	Type             models.TransferType `json:"type"`
+}
+
+func (t *NFTTransfer) ScanRow(scanner db.RowScanner) error {
+	err := scanner.Scan(
+		&t.BlockNumber, &t.TransactionIndex, &t.LogIndex,
+		&t.TxHash, &t.EventName, &t.From, &t.To,
+		&t.Contract, &t.TokenID, &t.TokenUniqueID, &t.BlockTime, &t.Type,
+	)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	return err
 }
 
 type TokenTransferCheckpoint struct {
