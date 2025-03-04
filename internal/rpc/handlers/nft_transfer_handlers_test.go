@@ -22,10 +22,26 @@ func fakeNftTransferPaginatedHandler(r *http.Request, rq db.QueryRunner, pgQueri
 			{
 				Contract: "0xabc",
 				TokenID:  "42",
-				TxHash:   "0x123",
+				TxHash:   "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 			},
 		},
 	}, nil
+}
+
+
+func checkNftTransferPaginatedResponse(t *testing.T, result interface{}) {
+	resMap, ok := result.(PaginatedResponse[ethdb.NFTTransfer])
+	require.True(t, ok, "result should be a map")
+
+	require.Equal(t, 1, resMap.Page)
+	require.Equal(t, 10, resMap.PageSize)
+	require.Equal(t, 100, resMap.Total)
+	require.Nil(t, resMap.Prev)
+	require.Nil(t, resMap.Next)
+	require.Equal(t, 1, len(resMap.Data))
+	require.Equal(t, "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", resMap.Data[0].TxHash)
+	require.Equal(t, "0xabc", resMap.Data[0].Contract)
+	require.Equal(t, "42", resMap.Data[0].TokenID)
 }
 
 func TestNFTTransfersGetHandler(t *testing.T) {
@@ -43,33 +59,7 @@ func TestNFTTransfersGetHandler(t *testing.T) {
 	result, err := NFTTransfersGetHandler(req, dummyDB)
 	require.NoError(t, err)
 
-	resMap, ok := result.(PaginatedResponse[ethdb.NFTTransfer])
-	require.True(t, ok, "result should be a map")
-
-	require.Equal(t, 1, resMap.Page)
-	require.Equal(t, 10, resMap.PageSize)
-	require.Equal(t, 100, resMap.Total)
-	require.Nil(t, resMap.Prev)
-	require.Nil(t, resMap.Next)
-	require.Equal(t, 1, len(resMap.Data))
-	require.Equal(t, "0x123", resMap.Data[0].TxHash)
-	require.Equal(t, "0xabc", resMap.Data[0].Contract)
-	require.Equal(t, "42", resMap.Data[0].TokenID)
-}
-
-func checkNftTransferPaginatedResponse(t *testing.T, result interface{}) {
-	resMap, ok := result.(PaginatedResponse[ethdb.NFTTransfer])
-	require.True(t, ok, "result should be a map")
-
-	require.Equal(t, 1, resMap.Page)
-	require.Equal(t, 10, resMap.PageSize)
-	require.Equal(t, 100, resMap.Total)
-	require.Nil(t, resMap.Prev)
-	require.Nil(t, resMap.Next)
-	require.Equal(t, 1, len(resMap.Data))
-	require.Equal(t, "0x123", resMap.Data[0].TxHash)
-	require.Equal(t, "0xabc", resMap.Data[0].Contract)
-	require.Equal(t, "42", resMap.Data[0].TokenID)
+	checkNftTransferPaginatedResponse(t, result)
 }
 
 func TestNFTTransfersGetHandler_WithContract(t *testing.T) {
@@ -117,7 +107,7 @@ func TestNFTTransfersGetHandler_WithTxHash(t *testing.T) {
 		PaginatedNftTransferQueryHandlerFunc = origHandler
 	}()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/nft_transfers/0x123", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nft_transfers/0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", nil)
 
 	var dummyDB *sql.DB
 
