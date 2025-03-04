@@ -55,6 +55,7 @@ func SetupHandlers(mux *http.ServeMux, handlers MethodHandlers) {
 			}
 			resp, err := handler(r)
 			if err != nil {
+				fmt.Println("i am error", err)
 				if err.Error() == "not found" {
 					http.Error(w, err.Error(), http.StatusNotFound)
 					return
@@ -67,6 +68,7 @@ func SetupHandlers(mux *http.ServeMux, handlers MethodHandlers) {
 			if resp != nil {
 				err := json.NewEncoder(w).Encode(resp)
 				if err != nil {
+					fmt.Println("i am error", err)
 					zap.L().Error("failed to encode response", zap.Error(err))
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
