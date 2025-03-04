@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/6529-Collections/6529node/internal/db"
+	"github.com/stretchr/testify/assert"
 )
 
 //------------------//
@@ -172,6 +173,12 @@ func TestConvertStructToMap(t *testing.T) {
 			t.Errorf("Expected error from JSON marshal, got nil with map %v", m)
 		}
 	})
+}
+
+func TestConvertStructToMap_UnmarshalError(t *testing.T) {
+	_, err := ConvertStructToMap([]byte("lala"))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "json: cannot unmarshal string into Go")
 }
 
 func TestPaginatedQueryHandler(t *testing.T) {
