@@ -9,6 +9,7 @@ import (
 )
 
 var ownerDb ethdb.NFTOwnerDb = ethdb.NewOwnerDb()
+var PaginatedNftOwnerQueryHandlerFunc = PaginatedQueryHandler[ethdb.NFTOwner]
 
 func NFTOwnersGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
 	// For /api/v1/nft_owners => parts = ["api","v1","nft_owners"]
@@ -36,5 +37,5 @@ func NFTOwnersGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
 		queryParams = []interface{}{contract}
 	}
 
-	return PaginatedQueryHandler[ethdb.NFTOwner](r, db, ownerDb, query, queryParams)
+	return PaginatedNftOwnerQueryHandlerFunc(r, db, ownerDb, query, queryParams)
 }

@@ -10,6 +10,7 @@ import (
 )
 
 var transferDb ethdb.NFTTransferDb = ethdb.NewTransferDb()
+var PaginatedNftTransferQueryHandlerFunc = PaginatedQueryHandler[ethdb.NFTTransfer]
 
 var txHashRegex = regexp.MustCompile(`^0x[0-9a-fA-F]{64}$`)
 
@@ -33,25 +34,21 @@ func NFTTransfersGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
 		tokenID = parts[4]
 	}
 
+	query := ""
+	queryParams := []interface{}{}
+
 	if txHash != "" {
-		query := "tx_hash = ?"
-		queryParams := []interface{}{txHash}
-		return PaginatedQueryHandler[ethdb.NFTTransfer](r, db, transferDb, query, queryParams)
+		query = "tx_hash = ?"
+		queryParams = []interface{}{txHash}
 	}
 
 	if contract != "" && tokenID != "" {
-		query := "contract = ? AND token_id = ?"
-		queryParams := []interface{}{contract, tokenID}
-		return PaginatedQueryHandler[ethdb.NFTTransfer](r, db, transferDb, query, queryParams)
+		query = "contract = ? AND token_id = ?"
+		queryParams = []interface{}{contract, tokenID}
+	} else if contract != "" {
+		query = "contract = ?"
+		queryParams = []interface{}{contract}
 	}
 
-	if contract != "" {
-		query := "contract = ?"
-		queryParams := []interface{}{contract}
-		return PaginatedQueryHandler[ethdb.NFTTransfer](r, db, transferDb, query, queryParams)
-	}
-
-	query := ""
-	queryParams := []interface{}{}
-	return PaginatedQueryHandler[ethdb.NFTTransfer](r, db, transferDb, query, queryParams)
+	return PaginatedNftTransferQueryHandlerFunc(r, db, transferDb, query, queryParams)
 }
