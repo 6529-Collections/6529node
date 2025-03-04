@@ -28,7 +28,6 @@ func fakeNftTransferPaginatedHandler(r *http.Request, rq db.QueryRunner, pgQueri
 	}, nil
 }
 
-
 func checkNftTransferPaginatedResponse(t *testing.T, result interface{}) {
 	resMap, ok := result.(PaginatedResponse[ethdb.NFTTransfer])
 	require.True(t, ok, "result should be a map")

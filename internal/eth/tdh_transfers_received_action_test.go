@@ -346,7 +346,6 @@ func TestDefaultTdhTransfersReceivedAction_ChunkedTransfers(t *testing.T) {
 
 	o := newDefaultTdhTransfersReceivedAction(t, deps)
 
-	// We exceed the batchSize=100 => 120 transfers => 2 sub-batches
 	var bigTransfers []models.TokenTransfer
 	for i := 0; i < 50; i++ {
 		bigTransfers = append(bigTransfers, models.TokenTransfer{
@@ -378,6 +377,21 @@ func TestDefaultTdhTransfersReceivedAction_ChunkedTransfers(t *testing.T) {
 		})
 	}
 
+	for i := 0; i < 50; i++ {
+		bigTransfers = append(bigTransfers, models.TokenTransfer{
+			From:             constants.NULL_ADDRESS,
+			To:               fmt.Sprintf("0xReceiver%d", i),
+			Contract:         "0xBatchContract",
+			TokenID:          "TokenXYZ",
+			Amount:           1,
+			BlockNumber:      100,
+			TransactionIndex: 0,
+			LogIndex:         uint64(i),
+			BlockTime:        99999,
+			Type:             models.MINT,
+		})
+	}
+
 	batch := models.TokenTransferBatch{
 		Transfers:   bigTransfers,
 		BlockNumber: 200,
@@ -395,7 +409,7 @@ func TestDefaultTdhTransfersReceivedAction_ChunkedTransfers(t *testing.T) {
 	require.NoError(t, err)
 	xfers, xferErr := deps.transferDb.GetTransfersAfterCheckpoint(txCheck, 0, 0, 0)
 	require.NoError(t, xferErr)
-	assert.Len(t, xfers, 100, "All 100 should be stored")
+	assert.Len(t, xfers, 150, "All 150 should be stored")
 
 	_ = txCheck.Rollback()
 }
