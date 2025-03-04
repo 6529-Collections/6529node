@@ -106,5 +106,5 @@ func newNFTOwner() *NFTOwner {
 }
 
 func (o *OwnerDbImpl) GetPaginatedResponseForQuery(rq db.QueryRunner, queryOptions db.QueryOptions, queryParams []interface{}) (total int, data []*NFTOwner, err error) {
-	return db.GetPaginatedResponseForQuery[*NFTOwner]("nft_owners", rq, allOwnersQuery, queryOptions, []string{"contract", "token_id", "token_unique_id"}, queryParams, newNFTOwner)
+	return db.GetPaginatedResponseForQuery("nft_owners", rq, allOwnersQuery, queryOptions, []string{"contract", "token_id", "token_unique_id"}, queryParams, newNFTOwner)
 }

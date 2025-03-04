@@ -62,7 +62,7 @@ func (t *TransferDbImpl) GetTransfersAfterCheckpoint(tx *sql.Tx, blockNumber, tx
 	}
 	defer rows.Close()
 
-	return db.ScanAll[*NFTTransfer](rows, newNFTTransfer)
+	return db.ScanAll(rows, newNFTTransfer)
 }
 
 func newNFTTransfer() *NFTTransfer {
@@ -89,5 +89,5 @@ func (t *TransferDbImpl) GetLatestTransfer(tx *sql.Tx) (*NFTTransfer, error) {
 }
 
 func (t *TransferDbImpl) GetPaginatedResponseForQuery(rq db.QueryRunner, queryOptions db.QueryOptions, queryParams []interface{}) (total int, data []*NFTTransfer, err error) {
-	return db.GetPaginatedResponseForQuery[*NFTTransfer]("nft_transfers", rq, allTransfersQuery, queryOptions, []string{"block_number", "transaction_index", "log_index"}, queryParams, newNFTTransfer)
+	return db.GetPaginatedResponseForQuery("nft_transfers", rq, allTransfersQuery, queryOptions, []string{"block_number", "transaction_index", "log_index"}, queryParams, newNFTTransfer)
 }

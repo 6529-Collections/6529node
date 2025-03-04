@@ -143,7 +143,7 @@ func GetPaginatedResponseForQuery[T Scannable](
 	defer rows.Close()
 
 	// Scan rows into a slice of T.
-	data, err = ScanAll[T](rows, factory)
+	data, err = ScanAll(rows, factory)
 	if err != nil {
 		return 0, nil, err
 	}
