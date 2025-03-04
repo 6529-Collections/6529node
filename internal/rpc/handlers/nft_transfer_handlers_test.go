@@ -36,15 +36,13 @@ func TestNFTTransfersGetHandler_WithContractAndTokenID(t *testing.T) {
 		PaginatedNftTransferQueryHandlerFunc = origHandler
 	}()
 
-	// Use a test URL that includes both a contract and a tokenID.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nfts/0xABC/42", nil)
-	// Use a dummy *sql.DB; it is not used by our fakePaginatedHandler.
+
 	var dummyDB *sql.DB
 
 	result, err := NFTTransfersGetHandler(req, dummyDB)
 	require.NoError(t, err)
 
-	// The fakePaginatedHandler returns a map with the query and parameters.
 	resMap, ok := result.(PaginatedResponse[ethdb.NFTTransfer])
 	require.True(t, ok, "result should be a map")
 
@@ -67,15 +65,13 @@ func TestNFTTransfersGetHandler_WithTxHash(t *testing.T) {
 		PaginatedNftTransferQueryHandlerFunc = origHandler
 	}()
 
-	// Use a test URL that includes a txHash.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nft_transfers/0x123", nil)
-	// Use a dummy *sql.DB; it is not used by our fakePaginatedHandler.
+
 	var dummyDB *sql.DB
 
 	result, err := NFTTransfersGetHandler(req, dummyDB)
 	require.NoError(t, err)
 
-	// The fakePaginatedHandler returns a map with the query and parameters.
 	resMap, ok := result.(PaginatedResponse[ethdb.NFTTransfer])
 	require.True(t, ok, "result should be a map")
 

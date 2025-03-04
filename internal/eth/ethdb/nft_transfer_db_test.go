@@ -754,3 +754,8 @@ func TestTransferDb_GetPaginatedResponseForQuery_TotalCountError(t *testing.T) {
 	assert.Equal(t, 0, total)
 	assert.Nil(t, transfers)
 }
+
+func TestNewNFTTransfer(t *testing.T) {
+	transfer := newNFTTransfer()
+	require.NotNil(t, transfer)
+}

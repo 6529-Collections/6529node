@@ -1077,3 +1077,8 @@ func TestUpdateOwnershipReverse_InsertError(t *testing.T) {
 		t.Errorf("there were unfulfilled expectations: %s", err)
 	}
 }
+
+func TestNewNFTOwner(t *testing.T) {
+	owner := newNFTOwner()
+	require.NotNil(t, owner)
+}

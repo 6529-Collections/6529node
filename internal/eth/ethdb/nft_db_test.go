@@ -617,3 +617,8 @@ func TestNFTDb_UpdateBurntSupplyReverse_ForceErrorOnUpdate(t *testing.T) {
 
 	_ = tx2.Rollback()
 }
+
+func TestNewNFT(t *testing.T) {
+	nft := newNFT()
+	require.NotNil(t, nft)
+}

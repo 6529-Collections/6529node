@@ -35,15 +35,13 @@ func TestNFTsGetHandler_WithContractAndTokenID(t *testing.T) {
 		PaginatedNftQueryHandlerFunc = origHandler
 	}()
 
-	// Use a test URL that includes both a contract and a tokenID.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nfts/0xABC/42", nil)
-	// Use a dummy *sql.DB; it is not used by our fakePaginatedHandler.
+
 	var dummyDB *sql.DB
 
 	result, err := NFTsGetHandler(req, dummyDB)
 	require.NoError(t, err)
 
-	// The fakePaginatedHandler returns a map with the query and parameters.
 	resMap, ok := result.(PaginatedResponse[ethdb.NFT])
 	require.True(t, ok, "result should be a map")
 
