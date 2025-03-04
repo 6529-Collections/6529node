@@ -27,6 +27,56 @@ func fakeNftPaginatedHandler(r *http.Request, rq db.QueryRunner, pgQuerier db.Pa
 	}, nil
 }
 
+func checkNftPaginatedResponse(t *testing.T, result interface{}) {
+	resMap, ok := result.(PaginatedResponse[ethdb.NFT])
+	require.True(t, ok, "result should be a map")
+
+	require.Equal(t, 1, resMap.Page)
+	require.Equal(t, 10, resMap.PageSize)
+	require.Equal(t, 100, resMap.Total)
+	require.Nil(t, resMap.Prev)
+	require.Nil(t, resMap.Next)
+	require.Equal(t, 1, len(resMap.Data))
+	require.Equal(t, "0xabc", resMap.Data[0].Contract)
+	require.Equal(t, "42", resMap.Data[0].TokenID)
+}
+
+func TestNFTsGetHandler(t *testing.T) {
+	// Save the original handler and restore it after the test.
+	origHandler := PaginatedNftQueryHandlerFunc
+	PaginatedNftQueryHandlerFunc = fakeNftPaginatedHandler
+	defer func() {
+		PaginatedNftQueryHandlerFunc = origHandler
+	}()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nfts", nil)
+
+	var dummyDB *sql.DB
+
+	result, err := NFTsGetHandler(req, dummyDB)
+	require.NoError(t, err)
+
+	checkNftPaginatedResponse(t, result)
+}
+
+func TestNFTsGetHandler_WithContract(t *testing.T) {
+	// Save the original handler and restore it after the test.
+	origHandler := PaginatedNftQueryHandlerFunc
+	PaginatedNftQueryHandlerFunc = fakeNftPaginatedHandler
+	defer func() {
+		PaginatedNftQueryHandlerFunc = origHandler
+	}()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nfts/0xABC", nil)
+
+	var dummyDB *sql.DB
+
+	result, err := NFTsGetHandler(req, dummyDB)
+	require.NoError(t, err)
+
+	checkNftPaginatedResponse(t, result)
+}
+
 func TestNFTsGetHandler_WithContractAndTokenID(t *testing.T) {
 	// Save the original handler and restore it after the test.
 	origHandler := PaginatedNftQueryHandlerFunc
@@ -42,15 +92,5 @@ func TestNFTsGetHandler_WithContractAndTokenID(t *testing.T) {
 	result, err := NFTsGetHandler(req, dummyDB)
 	require.NoError(t, err)
 
-	resMap, ok := result.(PaginatedResponse[ethdb.NFT])
-	require.True(t, ok, "result should be a map")
-
-	require.Equal(t, 1, resMap.Page)
-	require.Equal(t, 10, resMap.PageSize)
-	require.Equal(t, 100, resMap.Total)
-	require.Nil(t, resMap.Prev)
-	require.Nil(t, resMap.Next)
-	require.Equal(t, 1, len(resMap.Data))
-	require.Equal(t, "0xabc", resMap.Data[0].Contract)
-	require.Equal(t, "42", resMap.Data[0].TokenID)
+	checkNftPaginatedResponse(t, result)
 }

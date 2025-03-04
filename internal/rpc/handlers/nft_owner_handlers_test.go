@@ -28,21 +28,7 @@ func fakeNftOwnerPaginatedHandler(r *http.Request, rq db.QueryRunner, pgQuerier 
 	}, nil
 }
 
-func TestNFTOwnersGetHandler_WithContractAndTokenID(t *testing.T) {
-	// Save the original handler and restore it after the test.
-	origHandler := PaginatedNftOwnerQueryHandlerFunc
-	PaginatedNftOwnerQueryHandlerFunc = fakeNftOwnerPaginatedHandler
-	defer func() {
-		PaginatedNftOwnerQueryHandlerFunc = origHandler
-	}()
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/nfts/0xABC/42", nil)
-
-	var dummyDB *sql.DB
-
-	result, err := NFTOwnersGetHandler(req, dummyDB)
-	require.NoError(t, err)
-
+func checkNftOwnerResponse(t *testing.T, result interface{}) {
 	resMap, ok := result.(PaginatedResponse[ethdb.NFTOwner])
 	require.True(t, ok, "result should be a map")
 
@@ -55,4 +41,59 @@ func TestNFTOwnersGetHandler_WithContractAndTokenID(t *testing.T) {
 	require.Equal(t, "0x123", resMap.Data[0].Owner)
 	require.Equal(t, "0xabc", resMap.Data[0].Contract)
 	require.Equal(t, "42", resMap.Data[0].TokenID)
+}
+
+func TestNFTOwnersGetHandler(t *testing.T) {
+	// Save the original handler and restore it after the test.
+	origHandler := PaginatedNftOwnerQueryHandlerFunc
+	PaginatedNftOwnerQueryHandlerFunc = fakeNftOwnerPaginatedHandler
+	defer func() {
+		PaginatedNftOwnerQueryHandlerFunc = origHandler
+	}()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nft_owners", nil)
+
+	var dummyDB *sql.DB
+
+	result, err := NFTOwnersGetHandler(req, dummyDB)
+	require.NoError(t, err)
+
+	checkNftOwnerResponse(t, result)
+
+}
+
+func TestNFTOwnersGetHandler_WithContract(t *testing.T) {
+	// Save the original handler and restore it after the test.
+	origHandler := PaginatedNftOwnerQueryHandlerFunc
+	PaginatedNftOwnerQueryHandlerFunc = fakeNftOwnerPaginatedHandler
+	defer func() {
+		PaginatedNftOwnerQueryHandlerFunc = origHandler
+	}()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nft_owners/0xABC", nil)
+
+	var dummyDB *sql.DB
+
+	result, err := NFTOwnersGetHandler(req, dummyDB)
+	require.NoError(t, err)
+
+	checkNftOwnerResponse(t, result)
+}
+
+func TestNFTOwnersGetHandler_WithContractAndTokenID(t *testing.T) {
+	// Save the original handler and restore it after the test.
+	origHandler := PaginatedNftOwnerQueryHandlerFunc
+	PaginatedNftOwnerQueryHandlerFunc = fakeNftOwnerPaginatedHandler
+	defer func() {
+		PaginatedNftOwnerQueryHandlerFunc = origHandler
+	}()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nft_owners/0xABC/42", nil)
+
+	var dummyDB *sql.DB
+
+	result, err := NFTOwnersGetHandler(req, dummyDB)
+	require.NoError(t, err)
+
+	checkNftOwnerResponse(t, result)
 }
