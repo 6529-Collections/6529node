@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"regexp"
 	"sync"
 	"testing"
 
@@ -332,6 +333,30 @@ func TestTransferDb_GetLatestTransfer_Basic(t *testing.T) {
 	assert.Equal(t, models.MINT, latest.Type)
 
 	_ = txCheck.Rollback()
+}
+
+func TestTransferDb_GetLatestTransfer_Error(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err, "error creating sqlmock")
+	defer db.Close()
+
+	// Begin transaction
+	mock.ExpectBegin()
+	tx, err := db.Begin()
+	require.NoError(t, err)
+
+	// Mock the SELECT query to fail
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT block_number, transaction_index, log_index, tx_hash, event_name, from_address, to_address, contract, token_id, token_unique_id, block_time, transfer_type FROM nft_transfers ORDER BY block_number DESC, transaction_index DESC, log_index DESC LIMIT ? OFFSET ?`)).
+		WillReturnError(errors.New("query error"))
+
+	transferDb := NewTransferDb()
+
+	latest, err := transferDb.GetLatestTransfer(tx)
+	require.Error(t, err, "Should get an error")
+	assert.Contains(t, err.Error(), "query error", "Should get the specific error message")
+	assert.Nil(t, latest, "Should get nil when there's an error")
+
+	_ = tx.Rollback()
 }
 
 func TestTransferDb_ClosedDbBehavior(t *testing.T) {
