@@ -65,7 +65,7 @@ func (t *NFTTransfer) ScanRow(scanner db.RowScanner) error {
 		&t.Contract, &t.TokenID, &t.TokenUniqueID, &t.BlockTime, &t.Type,
 	)
 	if err == sql.ErrNoRows {
-		return nil
+		return nil // or handle no-row as needed
 	}
 	return err
 }
