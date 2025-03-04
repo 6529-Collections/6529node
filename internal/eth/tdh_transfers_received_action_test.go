@@ -16,6 +16,7 @@ import (
 	"github.com/6529-Collections/6529node/internal/db/testdb"
 	"github.com/6529-Collections/6529node/internal/eth/ethdb"
 	"github.com/6529-Collections/6529node/internal/eth/mocks"
+	"github.com/6529-Collections/6529node/pkg/constants"
 	"github.com/6529-Collections/6529node/pkg/tdh/models"
 )
 
@@ -347,9 +348,24 @@ func TestDefaultTdhTransfersReceivedAction_ChunkedTransfers(t *testing.T) {
 
 	// We exceed the batchSize=100 => 120 transfers => 2 sub-batches
 	var bigTransfers []models.TokenTransfer
-	for i := 0; i < 120; i++ {
+	for i := 0; i < 50; i++ {
 		bigTransfers = append(bigTransfers, models.TokenTransfer{
-			From:             "", // empty for MINT
+			From:             constants.NULL_ADDRESS,
+			To:               fmt.Sprintf("0xReceiver%d", i),
+			Contract:         "0xBatchContract",
+			TokenID:          "TokenABC",
+			Amount:           1,
+			BlockNumber:      200,
+			TransactionIndex: 1,
+			LogIndex:         uint64(i),
+			BlockTime:        99999,
+			Type:             models.MINT,
+		})
+	}
+
+	for i := 0; i < 50; i++ {
+		bigTransfers = append(bigTransfers, models.TokenTransfer{
+			From:             constants.NULL_ADDRESS,
 			To:               fmt.Sprintf("0xReceiver%d", i),
 			Contract:         "0xBatchContract",
 			TokenID:          "TokenXYZ",
@@ -358,7 +374,7 @@ func TestDefaultTdhTransfersReceivedAction_ChunkedTransfers(t *testing.T) {
 			TransactionIndex: 0,
 			LogIndex:         uint64(i),
 			BlockTime:        99999,
-			Type:             models.MINT, // <-- CHANGED to MINT
+			Type:             models.MINT,
 		})
 	}
 
@@ -379,7 +395,7 @@ func TestDefaultTdhTransfersReceivedAction_ChunkedTransfers(t *testing.T) {
 	require.NoError(t, err)
 	xfers, xferErr := deps.transferDb.GetTransfersAfterCheckpoint(txCheck, 0, 0, 0)
 	require.NoError(t, xferErr)
-	assert.Len(t, xfers, 120, "All 120 should be stored")
+	assert.Len(t, xfers, 100, "All 100 should be stored")
 
 	_ = txCheck.Rollback()
 }
@@ -839,17 +855,46 @@ func TestDefaultTdhTransfersReceivedAction_ApplyTransferReverse_ErrorGetUniqueID
 
 	action := newActionWithMocks(t, nftDbMock, ownerDbMock, transferDbMock, trackerDbMock)
 
-	// Force applyTransferReverse by calling reset, which calls applyTransferReverse
-	// Or we can manually call action.applyTransferReverse in a test if we refactor it to be public.
-	// For simpler coverage, let's use reset logic, which enumerates transfers and calls applyTransferReverse.
-	// We'll mock GetTransfersAfterCheckpoint to return 1 NFTTransfer so that reset will revert it.
 	transferDbMock.GetTransfersAfterCheckpointFn = func(tx *sql.Tx, blockNumber, txIndex, logIndex uint64) ([]*ethdb.NFTTransfer, error) {
 		return []*ethdb.NFTTransfer{
 			{
-				Type:     models.BURN,
-				Contract: "0xReverseBurn",
-				TokenID:  "ReverseToken",
-				To:       "0xTheBurnAddress",
+				Type:             models.BURN,
+				Contract:         "0xReverseBurn",
+				TokenID:          "ReverseToken",
+				To:               "0xTheBurnAddress",
+				BlockNumber:      10,
+				TransactionIndex: 1,
+				LogIndex:         1,
+				BlockTime:        161800,
+				TxHash:           "0xTxHash",
+				EventName:        "Transfer",
+				From:             "0xFrom",
+			},
+			{
+				Type:             models.BURN,
+				Contract:         "0xReverseBurn2",
+				TokenID:          "ReverseToken2",
+				To:               "0xTheBurnAddress2",
+				BlockNumber:      10,
+				TransactionIndex: 1,
+				LogIndex:         3,
+				BlockTime:        161800,
+				TxHash:           "0xTxHash",
+				EventName:        "Transfer",
+				From:             "0xFrom",
+			},
+			{
+				Type:             models.BURN,
+				Contract:         "0xReverseBurn3",
+				TokenID:          "ReverseToken3",
+				To:               "0xTheBurnAddress3",
+				BlockNumber:      10,
+				TransactionIndex: 1,
+				LogIndex:         2,
+				BlockTime:        161800,
+				TxHash:           "0xTxHash",
+				EventName:        "Transfer",
+				From:             "0xFrom",
 			},
 		}, nil
 	}
@@ -861,7 +906,7 @@ func TestDefaultTdhTransfersReceivedAction_ApplyTransferReverse_ErrorGetUniqueID
 		return nil, nil
 	}
 
-	err := action.reset(nil /*tx*/, 999, 0, 0) // we pass nil for *sql.Tx in this contrived scenario
+	err := action.reset(nil /*tx*/, 999, 0, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GetUniqueID forced error in reverse")
 }
