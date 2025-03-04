@@ -135,9 +135,6 @@ func GetPaginatedResponseForQuery[T Scannable](
 	// Append page size and offset to the query parameters.
 	params := append(queryParams, queryOptions.PageSize, offset)
 
-	fmt.Println("i am query: ", query)
-	fmt.Println("i am params: ", params)
-	
 	// Execute the main query.
 	rows, err := rq.Query(query, params...)
 	if err != nil {

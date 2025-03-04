@@ -71,9 +71,21 @@ func newNFTTransfer() *NFTTransfer {
 
 // GetLatestTransfer retrieves the most recent transfer.
 func (t *TransferDbImpl) GetLatestTransfer(tx *sql.Tx) (*NFTTransfer, error) {
-	row := tx.QueryRow(allTransfersQuery + `
-        ORDER BY block_number DESC, transaction_index DESC, log_index DESC LIMIT 1`)
-	return db.ScanOne[*NFTTransfer](row, newNFTTransfer)
+	_, data, err := t.GetPaginatedResponseForQuery(tx, db.QueryOptions{
+		Direction: db.QueryDirectionDesc,
+		Page:      1,
+		PageSize:  1,
+	}, []interface{}{})
+
+	if err != nil {
+		return nil, err
+	}
+
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	return data[0], nil
 }
 
 func (t *TransferDbImpl) GetPaginatedResponseForQuery(rq db.QueryRunner, queryOptions db.QueryOptions, queryParams []interface{}) (total int, data []*NFTTransfer, err error) {
