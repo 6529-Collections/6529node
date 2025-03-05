@@ -14,57 +14,87 @@ import (
 	"go.uber.org/zap"
 )
 
-var Version = "dev" // this is overridden by the release build script
+var Version = "dev" // Overridden by release build script
 
 func init() {
-	zapConf := zap.Must(zap.NewProduction())
+	logger := zap.Must(zap.NewProduction())
 	if config.Get().LogZapMode == "development" {
-		zapConf = zap.Must(zap.NewDevelopment())
+		logger = zap.Must(zap.NewDevelopment())
 	}
-	zap.ReplaceGlobals(zapConf)
+	zap.ReplaceGlobals(logger)
 }
 
 func main() {
-	zap.L().Info("Starting 6529-Collections/6529node...", zap.String("Version", Version))
+	zap.L().Info("Starting 6529-Collections/6529node...",
+		zap.String("Version", Version))
 
-	sqlite, err := db.OpenSqlite("./db/sqlite/sqlite")
-	if err != nil {
-		zap.L().Error("Failed to open SQLite", zap.Error(err))
-		return
-	}
-	defer sqlite.Close()
-
+	// Main context: canceled when we want to stop normal operation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	closeRpcServer := rpc.StartRPCServer(config.Get().RPCPort, ctx)
+	// Open DB
+	sqlite, err := db.OpenSqlite("./db/sqlite/sqlite")
+	if err != nil {
+		zap.L().Fatal("Failed to open SQLite", zap.Error(err))
+	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-sigCh
-		zap.L().Info("Received termination signal, initiating shutdown", zap.String("signal", sig.String()))
-		closeRpcServer()
-		cancel()
-	}()
+	// Start RPC server (currently doesn't accept context for shutdown)
+	closeRpcServer := rpc.StartRPCServer(config.Get().RPCPort, sqlite, ctx)
 
+	// Create the P2P network transport
 	bootstrapAddr := config.Get().P2PBootstrapAddr
 	networkTransport, err := network_creator.NewNetworkTransport(bootstrapAddr, ctx)
 	if err != nil {
 		zap.L().Fatal("Failed to create network transport", zap.Error(err))
 	}
 
-	defer func() {
-		if err := networkTransport.Close(); err != nil {
-			zap.L().Warn("Error stopping transport", zap.Error(err))
-		}
-	}()
-
+	// Start TDH listening
 	if err := tdh.BlockUntilOnTipAndKeepListeningAsync(sqlite, ctx); err != nil {
 		zap.L().Error("Failed to listen on TDH contracts", zap.Error(err))
 		cancel()
 	}
-	<-ctx.Done()
+
+	// Catch up to two signals: first for graceful, second to force
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	doneCh := make(chan struct{})
+
+	go func() {
+		<-sigCh
+		zap.L().Info("Received shutdown signal, initiating graceful shutdown...")
+
+		// 1. Stop new requests on RPC
+		closeRpcServer()
+
+		// 2. Cancel main context, telling background tasks to stop
+		cancel()
+
+		// 3. Close the network transport
+		if err := networkTransport.Close(); err != nil {
+			zap.L().Warn("Error closing network transport", zap.Error(err))
+		}
+
+		// 4. Close DB
+		if err := sqlite.Close(); err != nil {
+			zap.L().Warn("Error closing DB", zap.Error(err))
+		}
+
+		// 5. Signal that cleanup is done
+		close(doneCh)
+
+		// If a second signal arrives, force an immediate exit
+		<-sigCh
+		zap.L().Error("Received second signal, forcing shutdown")
+		os.Exit(1)
+	}()
+
+	// Wait for either normal context cancellation or graceful shutdown completion
+	select {
+	case <-ctx.Done():
+	case <-doneCh:
+	}
 
 	zap.L().Info("Shutdown complete")
+	_ = zap.L().Sync()
 }

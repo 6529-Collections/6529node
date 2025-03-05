@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/6529-Collections/6529node/internal/db"
 	"go.uber.org/zap"
 )
 
@@ -17,8 +18,8 @@ type NFTDb interface {
 	UpdateSupplyReverse(txn *sql.Tx, contract string, tokenID string) (supply uint64, err error)
 	UpdateBurntSupplyReverse(txn *sql.Tx, contract string, tokenID string) error
 
-	// GetNft returns an NFT by contract and tokenID.
-	GetNft(txn *sql.Tx, contract string, tokenID string) (*NFT, error)
+	GetNft(rq db.QueryRunner, contract string, tokenID string) (*NFT, error)
+	db.PaginatedQuerier[NFT]
 }
 
 func NewNFTDb() NFTDb {
@@ -26,6 +27,11 @@ func NewNFTDb() NFTDb {
 }
 
 type NFTDbImpl struct{}
+
+const allNftsQuery = `
+	SELECT contract, token_id, supply, burnt_supply
+	FROM nfts
+`
 
 // UpdateSupply increments the supply by 1. If the NFT doesn't exist, it is created with supply = 1.
 func (n *NFTDbImpl) UpdateSupply(txn *sql.Tx, contract, tokenID string) (supply uint64, err error) {
@@ -104,13 +110,25 @@ func (n *NFTDbImpl) UpdateBurntSupplyReverse(txn *sql.Tx, contract, tokenID stri
 	return err
 }
 
-// GetNft returns an NFT by contract and tokenID.
-func (n *NFTDbImpl) GetNft(tx *sql.Tx, contract string, tokenID string) (*NFT, error) {
-	var nft NFT
-	err := tx.QueryRow("SELECT supply, burnt_supply FROM nfts WHERE contract = ? AND token_id = ?", contract, tokenID).Scan(&nft.Supply, &nft.BurntSupply)
-	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("NFT not found: contract=%s tokenID=%s", contract, tokenID)
+func newNFT() *NFT {
+	return &NFT{}
+}
+
+func (n *NFTDbImpl) GetPaginatedResponseForQuery(rq db.QueryRunner, queryOptions db.QueryOptions, queryParams []interface{}) (total int, data []*NFT, err error) {
+	return db.GetPaginatedResponseForQuery("nfts", rq, allNftsQuery, queryOptions, []string{"contract", "token_id"}, queryParams, newNFT)
+}
+
+func (n *NFTDbImpl) GetNft(rq db.QueryRunner, contract string, tokenID string) (*NFT, error) {
+	row := rq.QueryRow(fmt.Sprintf("%s WHERE contract = ? AND token_id = ?", allNftsQuery), contract, tokenID)
+
+	nft, err := db.ScanOne(row, newNFT)
+	if err != nil {
+		return nil, err
 	}
 
-	return &nft, err
+	if nft.Contract == "" || nft.TokenID == "" {
+		return nil, fmt.Errorf("not found")
+	}
+
+	return nft, nil
 }

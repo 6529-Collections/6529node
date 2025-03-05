@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/6529-Collections/6529node/internal/db"
 	"github.com/6529-Collections/6529node/pkg/tdh/models"
 )
 
-type OwnerDb interface {
+type NFTOwnerDb interface {
 	GetUniqueID(txn *sql.Tx, contract, tokenID string, address string) (uint64, error)
 
 	// Forward direction: from -> to
@@ -17,15 +18,19 @@ type OwnerDb interface {
 	// Reverse direction: undo a previous from->to by doing to->from
 	UpdateOwnershipReverse(txn *sql.Tx, transfer NFTTransfer, tokenUniqueID uint64) error
 
-	// GetBalance retrieves the balance of an owner for a specific NFT.
-	GetBalance(txn *sql.Tx, owner string, contract string, tokenID string) (uint64, error)
+	db.PaginatedQuerier[NFTOwner]
 }
 
-func NewOwnerDb() OwnerDb {
+func NewOwnerDb() NFTOwnerDb {
 	return &OwnerDbImpl{}
 }
 
 type OwnerDbImpl struct{}
+
+const allOwnersQuery = `
+	SELECT owner, contract, token_id, token_unique_id, timestamp
+	FROM nft_owners
+`
 
 // GetUniqueID retrieves the unique ID of an NFT for a specific address.
 func (o *OwnerDbImpl) GetUniqueID(txn *sql.Tx, contract, tokenID string, address string) (uint64, error) {
@@ -96,17 +101,10 @@ func (o *OwnerDbImpl) UpdateOwnershipReverse(tx *sql.Tx, transfer NFTTransfer, t
 	return nil
 }
 
-// GetBalance retrieves the balance of an owner for a specific NFT.
-func (o *OwnerDbImpl) GetBalance(tx *sql.Tx, owner, contract, tokenID string) (uint64, error) {
-	var balance uint64
-	err := tx.QueryRow("SELECT count(*) FROM nft_owners WHERE owner = ? AND contract = ? AND token_id = ?", owner, contract, tokenID).Scan(&balance)
+func newNFTOwner() *NFTOwner {
+	return &NFTOwner{}
+}
 
-	if err == sql.ErrNoRows {
-		return 0, nil // Owner has no balance for this NFT
-	}
-	if err != nil {
-		return 0, err
-	}
-
-	return balance, nil
+func (o *OwnerDbImpl) GetPaginatedResponseForQuery(rq db.QueryRunner, queryOptions db.QueryOptions, queryParams []interface{}) (total int, data []*NFTOwner, err error) {
+	return db.GetPaginatedResponseForQuery("nft_owners", rq, allOwnersQuery, queryOptions, []string{"contract", "token_id", "token_unique_id"}, queryParams, newNFTOwner)
 }

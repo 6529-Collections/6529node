@@ -15,7 +15,31 @@ import (
 
 var globalLoggerReplaceMu sync.Mutex
 
-func TestCreateApiV1Path(t *testing.T) {
+func TestConstantsCoverage(t *testing.T) {
+	if HTTP_GET != "GET" {
+		t.Errorf("HTTP_GET constant mismatch, got %s", HTTP_GET)
+	}
+	if HTTP_POST != "POST" {
+		t.Errorf("HTTP_POST constant mismatch, got %s", HTTP_POST)
+	}
+	if HTTP_PUT != "PUT" {
+		t.Errorf("HTTP_PUT constant mismatch, got %s", HTTP_PUT)
+	}
+	if HTTP_DELETE != "DELETE" {
+		t.Errorf("HTTP_DELETE constant mismatch, got %s", HTTP_DELETE)
+	}
+
+	_ = StatusEndpoint
+	_ = NFTsEndpoint
+	_ = NFTTransfersEndpoint
+	_ = NFTOwnersEndpoint
+
+	if len(SupportedVersions) != 1 || SupportedVersions[0] != ApiV1 {
+		t.Errorf("Expected SupportedVersions to contain only ApiV1, got %v", SupportedVersions)
+	}
+}
+
+func TestCreateApiPath(t *testing.T) {
 	testCases := []struct {
 		name  string
 		input string
@@ -29,7 +53,7 @@ func TestCreateApiV1Path(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := CreateApiV1Path(tc.input)
+			got := CreateApiPath(ApiV1, tc.input)
 			if got != tc.want {
 				t.Errorf("expected %q, got %q", tc.want, got)
 			}
@@ -43,12 +67,13 @@ func TestSetupHandlers_ValidMethod(t *testing.T) {
 	}
 
 	handlersMap := MethodHandlers{
-		CreateApiV1Path("test"): {
+		CreateApiPath(ApiV1, "test"): {
 			HTTP_GET: testHandler,
 		},
 	}
 
 	server := setupTestServer(t, handlersMap)
+	defer server.Close()
 
 	resp, err := http.Get(server.URL + "/api/v1/test")
 	if err != nil {
@@ -76,7 +101,7 @@ func TestSetupHandlers_ValidMethod(t *testing.T) {
 
 func TestSetupHandlers_MethodNotAllowed(t *testing.T) {
 	handlersMap := MethodHandlers{
-		CreateApiV1Path("unsupportedMethod"): {
+		CreateApiPath(ApiV1, "unsupportedMethod"): {
 			HTTP_GET: func(r *http.Request) (any, error) {
 				return map[string]string{"message": "only GET is supported"}, nil
 			},
@@ -84,6 +109,7 @@ func TestSetupHandlers_MethodNotAllowed(t *testing.T) {
 	}
 
 	server := setupTestServer(t, handlersMap)
+	defer server.Close()
 
 	resp, err := http.Post(server.URL+"/api/v1/unsupportedMethod", "application/json", nil)
 	if err != nil {
@@ -112,12 +138,13 @@ func TestSetupHandlers_HandlerError(t *testing.T) {
 	}
 
 	handlersMap := MethodHandlers{
-		CreateApiV1Path("errorTest"): {
+		CreateApiPath(ApiV1, "errorTest"): {
 			HTTP_GET: testHandler,
 		},
 	}
 
 	server := setupTestServer(t, handlersMap)
+	defer server.Close()
 
 	resp, err := http.Get(server.URL + "/api/v1/errorTest")
 	if err != nil {
@@ -135,18 +162,42 @@ func TestSetupHandlers_HandlerError(t *testing.T) {
 	}
 }
 
+func TestSetupHandlers_HandlerNotFoundError(t *testing.T) {
+	handlersMap := MethodHandlers{
+		CreateApiPath(ApiV1, "notFoundTest"): {
+			HTTP_GET: func(r *http.Request) (any, error) {
+				return nil, errors.New("not found")
+			},
+		},
+	}
+
+	server := setupTestServer(t, handlersMap)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/api/v1/notFoundTest")
+	if err != nil {
+		t.Fatalf("failed to make GET request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d", resp.StatusCode)
+	}
+}
+
 func TestSetupHandlers_NilResponse(t *testing.T) {
 	testHandler := func(r *http.Request) (any, error) {
 		return nil, nil
 	}
 
 	handlersMap := MethodHandlers{
-		CreateApiV1Path("nilResponse"): {
+		CreateApiPath(ApiV1, "nilResponse"): {
 			HTTP_GET: testHandler,
 		},
 	}
 
 	server := setupTestServer(t, handlersMap)
+	defer server.Close()
 
 	resp, err := http.Get(server.URL + "/api/v1/nilResponse")
 	if err != nil {
@@ -182,12 +233,13 @@ func TestSetupHandlers_JsonEncodingError(t *testing.T) {
 	}
 
 	handlersMap := MethodHandlers{
-		CreateApiV1Path("encodingError"): {
+		CreateApiPath(ApiV1, "encodingError"): {
 			HTTP_GET: testHandler,
 		},
 	}
 
 	server := setupTestServer(t, handlersMap)
+	defer server.Close()
 
 	resp, err := http.Get(server.URL + "/api/v1/encodingError")
 	if err != nil {
@@ -209,6 +261,7 @@ func TestSetupHandlers_UnknownPath(t *testing.T) {
 	handlersMap := MethodHandlers{}
 
 	server := setupTestServer(t, handlersMap)
+	defer server.Close()
 
 	resp, err := http.Get(server.URL + "/api/v1/nonExistent")
 	if err != nil {
@@ -227,12 +280,13 @@ func TestSetupHandlers_ConcurrentRequests(t *testing.T) {
 	}
 
 	handlersMap := MethodHandlers{
-		CreateApiV1Path("concurrentTest"): {
+		CreateApiPath(ApiV1, "concurrentTest"): {
 			HTTP_GET: testHandler,
 		},
 	}
 
 	server := setupTestServer(t, handlersMap)
+	defer server.Close()
 
 	const concurrencyLevel = 10
 
@@ -274,8 +328,5 @@ func setupTestServer(t *testing.T, handlersMap MethodHandlers) *httptest.Server 
 	mux := http.NewServeMux()
 	SetupHandlers(mux, handlersMap)
 	server := httptest.NewServer(mux)
-	t.Cleanup(func() {
-		server.Close()
-	})
 	return server
 }

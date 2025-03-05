@@ -6,7 +6,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/6529-Collections/6529node/internal/db"
 	"github.com/6529-Collections/6529node/internal/db/testdb"
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -117,7 +119,8 @@ func TestNFTDb_UpdateBurntSupply_NonexistentNft(t *testing.T) {
 	// Double-check
 	txCheck, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
-	_, err = nftDB.GetNft(txCheck, "0xContractD", "TokenD")
+	nft, err := nftDB.GetNft(txCheck, "0xContractD", "TokenD")
+	assert.Nil(t, nft, "Still not found")
 	assert.Error(t, err, "Still not found")
 	_ = txCheck.Rollback()
 }
@@ -615,4 +618,49 @@ func TestNFTDb_UpdateBurntSupplyReverse_ForceErrorOnUpdate(t *testing.T) {
 	require.Error(t, err, "Expect error updating a non-updatable view")
 
 	_ = tx2.Rollback()
+}
+
+func TestNewNFT(t *testing.T) {
+	nft := newNFT()
+	require.NotNil(t, nft)
+}
+
+func TestNFTDb_GetNft_WithContractAndTokenID(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer mockDB.Close()
+
+	rows := sqlmock.NewRows([]string{"contract", "token_id", "supply", "burnt_supply"}).
+		AddRow("0xabc", "42", 100, 0).AddRow("0xabc", "43", 200, 10)
+
+	mock.ExpectQuery("(?i)SELECT contract, token_id, supply, burnt_supply FROM nfts WHERE contract = \\? ORDER BY .* LIMIT \\? OFFSET \\?").
+		WithArgs("0xabc", 10, 0).
+		WillReturnRows(rows)
+
+	mock.ExpectQuery("(?i)SELECT COUNT\\(\\*\\) FROM nfts WHERE contract = \\?").
+		WithArgs("0xabc").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+
+	nftDB := NewNFTDb()
+
+	total, data, err := nftDB.GetPaginatedResponseForQuery(mockDB, db.QueryOptions{
+		Where:    "contract = ?",
+		PageSize: 10,
+		Page:     1,
+	}, []interface{}{"0xabc"})
+
+	require.NoError(t, err)
+
+	require.Equal(t, 2, total)
+	require.Equal(t, 2, len(data))
+
+	require.Equal(t, "0xabc", data[0].Contract)
+	require.Equal(t, "42", data[0].TokenID)
+	require.Equal(t, uint64(100), data[0].Supply)
+	require.Equal(t, uint64(0), data[0].BurntSupply)
+
+	require.Equal(t, "0xabc", data[1].Contract)
+	require.Equal(t, "43", data[1].TokenID)
+	require.Equal(t, uint64(200), data[1].Supply)
+	require.Equal(t, uint64(10), data[1].BurntSupply)
 }

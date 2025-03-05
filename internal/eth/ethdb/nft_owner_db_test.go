@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	internaldb "github.com/6529-Collections/6529node/internal/db"
 	"github.com/6529-Collections/6529node/internal/db/testdb"
 	"github.com/6529-Collections/6529node/pkg/constants"
 	"github.com/6529-Collections/6529node/pkg/tdh/models"
@@ -20,10 +21,10 @@ import (
 
 // setupTestOwnerDb spins up a test DB, returns:
 //   - *sql.DB
-//   - OwnerDb (system under test)
+//   - NFTOwnerDb (system under test)
 //   - NFTDb (to create references in nfts table when needed)
 //   - cleanup function
-func setupTestOwnerDb(t *testing.T) (*sql.DB, OwnerDb, NFTDb, func()) {
+func setupTestOwnerDb(t *testing.T) (*sql.DB, NFTOwnerDb, NFTDb, func()) {
 	db, cleanup := testdb.SetupTestDB(t)
 
 	ownerDb := NewOwnerDb()
@@ -32,11 +33,10 @@ func setupTestOwnerDb(t *testing.T) (*sql.DB, OwnerDb, NFTDb, func()) {
 	return db, ownerDb, nftDb, cleanup
 }
 
-// createNftInDB is a helper that ensures a record in 'nfts' table
-// so we can insert into 'nft_owners' (which references it).
 func createNftInDB(t *testing.T, db *sql.DB, nftDb NFTDb, contract, tokenID string) {
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
+
 	// Use UpdateSupply once to create an NFT with supply=1
 	_, err = nftDb.UpdateSupply(tx, contract, tokenID)
 	require.NoError(t, err, "failed to create NFT in nfts table")
@@ -388,48 +388,15 @@ func TestOwnerDb_GetBalance_ZeroIfNoRecord(t *testing.T) {
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
 
-	balance, err := ownerDb.GetBalance(tx, "0xNobody", "0xContractZ", "TokenZ")
+	total, owners, err := ownerDb.GetPaginatedResponseForQuery(tx, internaldb.QueryOptions{
+		Where: "owner = ? AND contract = ? AND token_id = ?",
+	}, []interface{}{"0xNobody", "0xContractZ", "TokenZ"})
+
 	require.NoError(t, err)
-	assert.Equal(t, uint64(0), balance, "If no row, balance=0")
+	assert.Equal(t, 0, len(owners), "If no row, balance=0")
+	assert.Equal(t, 0, total, "If no row, balance=0")
 
 	_ = tx.Rollback()
-}
-
-func TestOwnerDb_GetBalance_NonZero(t *testing.T) {
-	db, ownerDb, nftDb, cleanup := setupTestOwnerDb(t)
-	defer cleanup()
-
-	// For demonstration, let's insert a row with balance=5.
-	contract := "0xBalanceContract"
-	tokenID := "BalanceToken"
-	ownerAddr := "0xOwnerBalance"
-
-	createNftInDB(t, db, nftDb, contract, tokenID)
-
-	tx, err := db.BeginTx(context.Background(), nil)
-	require.NoError(t, err)
-
-	for i := 0; i < 5; i++ {
-		_, err = tx.Exec(`
-			INSERT INTO nft_owners (owner, contract, token_id, token_unique_id, timestamp)
-			VALUES (?, ?, ?, ?, ?)`,
-			ownerAddr, contract, tokenID, i, 9999,
-		)
-	}
-	// If your table doesn't have 'balance', you'll need a different approach.
-	require.NoError(t, err)
-
-	require.NoError(t, tx.Commit())
-
-	// Now test the retrieval
-	txCheck, err := db.BeginTx(context.Background(), nil)
-	require.NoError(t, err)
-
-	balance, err := ownerDb.GetBalance(txCheck, ownerAddr, contract, tokenID)
-	require.NoError(t, err)
-	assert.Equal(t, uint64(5), balance, "Expected to read back the inserted balance=5")
-
-	_ = txCheck.Rollback()
 }
 
 func TestOwnerDb_ClosedDbBehavior(t *testing.T) {
@@ -990,9 +957,12 @@ func TestOwnerDb_GetBalance_Error_RealDB(t *testing.T) {
 	require.NoError(t, renameErr)
 
 	// Now any SELECT from "nft_owners" will fail
-	balance, err := ownerDb.GetBalance(tx, "0xSomeOwner", "0xAnyContract", "AnyToken")
+	total, owners, err := ownerDb.GetPaginatedResponseForQuery(tx, internaldb.QueryOptions{
+		Where: "owner = ? AND contract = ? AND token_id = ?",
+	}, []interface{}{"0xSomeOwner", "0xAnyContract", "AnyToken"})
 	assert.Error(t, err, "Expected an error because table doesn't exist now")
-	assert.Equal(t, uint64(0), balance)
+	assert.Equal(t, 0, total)
+	assert.Equal(t, 0, len(owners))
 
 	_ = tx.Rollback()
 }
@@ -1107,79 +1077,7 @@ func TestUpdateOwnershipReverse_InsertError(t *testing.T) {
 	}
 }
 
-func TestGetBalance_QueryError(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("error creating sqlmock: %v", err)
-	}
-	defer db.Close()
-
-	// Begin transaction
-	mock.ExpectBegin()
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatalf("error beginning tx: %v", err)
-	}
-
-	owner := "some-owner"
-	contract := "some-contract"
-	tokenID := "some-token"
-
-	// Prepare expected SQL query with proper escaping.
-	query := regexp.QuoteMeta("SELECT count(*) FROM nft_owners WHERE owner = ? AND contract = ? AND token_id = ?")
-	// Simulate a generic query error.
-	mock.ExpectQuery(query).
-		WithArgs(owner, contract, tokenID).
-		WillReturnError(errors.New("query error"))
-
-	ownerDbImpl := &OwnerDbImpl{}
-	balance, err := ownerDbImpl.GetBalance(tx, owner, contract, tokenID)
-	assert.Equal(t, uint64(0), balance)
-	assert.Error(t, err)
-
-	// Expect transaction rollback.
-	mock.ExpectRollback()
-	_ = tx.Rollback()
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unfulfilled expectations: %s", err)
-	}
-}
-
-func TestGetBalance_NoRows(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("error creating sqlmock: %v", err)
-	}
-	defer db.Close()
-
-	// Begin transaction
-	mock.ExpectBegin()
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatalf("error beginning tx: %v", err)
-	}
-
-	owner := "some-owner"
-	contract := "some-contract"
-	tokenID := "some-token"
-
-	query := regexp.QuoteMeta("SELECT count(*) FROM nft_owners WHERE owner = ? AND contract = ? AND token_id = ?")
-	// Simulate sql.ErrNoRows.
-	mock.ExpectQuery(query).
-		WithArgs(owner, contract, tokenID).
-		WillReturnError(sql.ErrNoRows)
-
-	ownerDbImpl := &OwnerDbImpl{}
-	balance, err := ownerDbImpl.GetBalance(tx, owner, contract, tokenID)
-
-	assert.Equal(t, uint64(0), balance)
-	assert.NoError(t, err)
-
-	mock.ExpectRollback()
-	_ = tx.Rollback()
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unfulfilled expectations: %s", err)
-	}
+func TestNewNFTOwner(t *testing.T) {
+	owner := newNFTOwner()
+	require.NotNil(t, owner)
 }
