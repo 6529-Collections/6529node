@@ -30,7 +30,7 @@ func OpenSqlite(path string) (*sql.DB, error) {
 
 	_, err = db.Exec(`
 		PRAGMA journal_mode = WAL;
-		PRAGMA synchronous = EXTRA;
+		PRAGMA synchronous = NORMAL;
 		PRAGMA cache_size = -2000;
 		PRAGMA busy_timeout = 5000;
 		PRAGMA foreign_keys = ON;

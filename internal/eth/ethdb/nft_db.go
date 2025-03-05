@@ -119,19 +119,16 @@ func (n *NFTDbImpl) GetPaginatedResponseForQuery(rq db.QueryRunner, queryOptions
 }
 
 func (n *NFTDbImpl) GetNft(rq db.QueryRunner, contract string, tokenID string) (*NFT, error) {
-	_, data, err := n.GetPaginatedResponseForQuery(rq, db.QueryOptions{
-		Where:    "contract = ? AND token_id = ?",
-		Page:     1,
-		PageSize: 1,
-	}, []interface{}{contract, tokenID})
+	row := rq.QueryRow(fmt.Sprintf("%s WHERE contract = ? AND token_id = ?", allNftsQuery), contract, tokenID)
 
+	nft, err := db.ScanOne(row, newNFT)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(data) == 0 {
-		return nil, fmt.Errorf("NFT not found: contract=%s tokenID=%s", contract, tokenID)
+	if nft.Contract == "" || nft.TokenID == "" {
+		return nil, fmt.Errorf("not found")
 	}
 
-	return data[0], nil
+	return nft, nil
 }

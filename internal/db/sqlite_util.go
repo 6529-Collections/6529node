@@ -42,7 +42,6 @@ func TxRunner[T any](ctx context.Context, db *sql.DB, fn func(*sql.Tx) (T, error
 
 	// Check if context was canceled after fn completed
 	if ctx.Err() != nil {
-		// This ensures we don't commit if the context is already canceled
 		err = ctx.Err()
 		return result, fmt.Errorf("context canceled before commit: %w", err)
 	}
@@ -87,7 +86,6 @@ func ScanOne[T Scannable](scanner RowScanner, factory func() T) (T, error) {
 	return item, nil
 }
 
-// ScanAll scans all rows into a slice of type T.
 func ScanAll[T Scannable](rows *sql.Rows, factory func() T) ([]T, error) {
 	var items []T
 	for rows.Next() {
@@ -95,7 +93,6 @@ func ScanAll[T Scannable](rows *sql.Rows, factory func() T) ([]T, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Only append non-nil items.
 		items = append(items, item)
 	}
 	return items, nil
@@ -110,29 +107,29 @@ func GetPaginatedResponseForQuery[T Scannable](
 	queryParams []interface{},
 	factory func() T,
 ) (total int, data []T, err error) {
-	// Calculate offset based on the page and page size.
+	// Check order columns
 	if len(orderColumns) == 0 {
 		return 0, nil, errors.New("no order columns provided")
 	}
-	// Build the ORDER BY clause dynamically based on queryOptions.Direction.
+
+	// ORDER BY clause
 	var orders []string
 	for _, col := range orderColumns {
 		orders = append(orders, fmt.Sprintf("%s %s", col, queryOptions.Direction))
 	}
 	orderClause := strings.Join(orders, ", ")
 
-	// Calculate offset.
+	// offset
 	offset := (queryOptions.Page - 1) * queryOptions.PageSize
 
-	// Build WHERE clause
+	// WHERE clause
 	whereClause := ""
 	if queryOptions.Where != "" {
 		whereClause = fmt.Sprintf("WHERE %s", queryOptions.Where)
 	}
 
-	// Build the main query with the provided ordering clause.
+	// Main query
 	query := fmt.Sprintf("%s %s ORDER BY %s LIMIT ? OFFSET ?", baseQuery, whereClause, orderClause)
-	// Append page size and offset to the query parameters.
 	params := append(queryParams, queryOptions.PageSize, offset)
 
 	// Execute the main query.
@@ -153,7 +150,7 @@ func GetPaginatedResponseForQuery[T Scannable](
 		return 0, nil, err
 	}
 
-	// Build the COUNT query.
+	// COUNT query.
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s %s", tableName, whereClause)
 	err = rq.QueryRow(countQuery, queryParams...).Scan(&total)
 	if err != nil {

@@ -219,14 +219,14 @@ func TestServer_ConcurrentRequests(t *testing.T) {
 	}
 }
 
-func checkResponse(t *testing.T, port int, path string) {
+func checkResponse(t *testing.T, port int, path string, expectedStatusCode int) {
 	url := fmt.Sprintf("http://127.0.0.1:%d/%s", port, path)
 
 	resp, err := http.Get(url)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, expectedStatusCode, resp.StatusCode)
 
 	body, readErr := io.ReadAll(resp.Body)
 	require.NoError(t, readErr)
@@ -251,30 +251,29 @@ func TestStartRPCServer_NFTsEndpoints(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// /nfts
-	checkResponse(t, port, "api/v1/nfts")
+	checkResponse(t, port, "api/v1/nfts", http.StatusOK)
 
 	// /nfts/:contract
-	checkResponse(t, port, "api/v1/nfts/0x123")
+	checkResponse(t, port, "api/v1/nfts/0x123", http.StatusOK)
 
 	// /nft/:contract/:tokenID
-	checkResponse(t, port, "api/v1/nfts/0x123/1")
+	checkResponse(t, port, "api/v1/nfts/0x123/1", http.StatusNotFound)
 
 	// /nft_owners
-	checkResponse(t, port, "api/v1/nft_owners")
+	checkResponse(t, port, "api/v1/nft_owners", http.StatusOK)
 
 	// /nft_owners/:contract
-	checkResponse(t, port, "api/v1/nft_owners/0x123")
+	checkResponse(t, port, "api/v1/nft_owners/0x123", http.StatusOK)
 
 	// /nft_owners/:contract/:tokenID
-	checkResponse(t, port, "api/v1/nft_owners/0x123/1")
+	checkResponse(t, port, "api/v1/nft_owners/0x123/1", http.StatusOK)
 
 	// /nft_transfers
-	checkResponse(t, port, "api/v1/nft_transfers")
+	checkResponse(t, port, "api/v1/nft_transfers", http.StatusOK)
 
 	// /nft_transfers/:contract
-	checkResponse(t, port, "api/v1/nft_transfers/0x123")
+	checkResponse(t, port, "api/v1/nft_transfers/0x123", http.StatusOK)
 
 	// /nft_transfers/:contract/:tokenID
-	checkResponse(t, port, "api/v1/nft_transfers/0x123/1")
-
+	checkResponse(t, port, "api/v1/nft_transfers/0x123/1", http.StatusOK)
 }

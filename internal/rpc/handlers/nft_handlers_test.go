@@ -8,6 +8,7 @@ import (
 
 	"github.com/6529-Collections/6529node/internal/db"
 	"github.com/6529-Collections/6529node/internal/eth/ethdb"
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,7 +43,6 @@ func checkNftPaginatedResponse(t *testing.T, result interface{}) {
 }
 
 func TestNFTsGetHandler(t *testing.T) {
-	// Save the original handler and restore it after the test.
 	origHandler := PaginatedNftQueryHandlerFunc
 	PaginatedNftQueryHandlerFunc = fakeNftPaginatedHandler
 	defer func() {
@@ -60,7 +60,6 @@ func TestNFTsGetHandler(t *testing.T) {
 }
 
 func TestNFTsGetHandler_WithContract(t *testing.T) {
-	// Save the original handler and restore it after the test.
 	origHandler := PaginatedNftQueryHandlerFunc
 	PaginatedNftQueryHandlerFunc = fakeNftPaginatedHandler
 	defer func() {
@@ -78,19 +77,27 @@ func TestNFTsGetHandler_WithContract(t *testing.T) {
 }
 
 func TestNFTsGetHandler_WithContractAndTokenID(t *testing.T) {
-	// Save the original handler and restore it after the test.
-	origHandler := PaginatedNftQueryHandlerFunc
-	PaginatedNftQueryHandlerFunc = fakeNftPaginatedHandler
-	defer func() {
-		PaginatedNftQueryHandlerFunc = origHandler
-	}()
-
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nfts/0xABC/42", nil)
 
-	var dummyDB *sql.DB
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
 
-	result, err := NFTsGetHandler(req, dummyDB)
+	rows := sqlmock.NewRows([]string{"contract", "token_id", "supply", "burnt_supply"}).
+		AddRow("0xabc", "42", 100, 0)
+
+	mock.ExpectQuery("SELECT .* FROM nfts WHERE contract = \\? AND token_id = \\?").
+		WithArgs("0xabc", "42").
+		WillReturnRows(rows)
+
+	result, err := NFTsGetHandler(req, db)
 	require.NoError(t, err)
 
-	checkNftPaginatedResponse(t, result)
+	nft, ok := result.(*ethdb.NFT)
+	require.True(t, ok, "result should be of type ethdb.NFT")
+
+	require.Equal(t, "0xabc", nft.Contract)
+	require.Equal(t, "42", nft.TokenID)
+	require.Equal(t, uint64(100), nft.Supply)
+	require.Equal(t, uint64(0), nft.BurntSupply)
 }

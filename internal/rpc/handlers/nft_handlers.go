@@ -26,12 +26,14 @@ func NFTsGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
 		tokenID = parts[4]
 	}
 
+	if contract != "" && tokenID != "" {
+		return nftDb.GetNft(db, contract, tokenID)
+	}
+
 	query := ""
 	queryParams := []interface{}{}
-	if contract != "" && tokenID != "" {
-		query = "contract = ? AND token_id = ?"
-		queryParams = []interface{}{contract, tokenID}
-	} else if contract != "" {
+
+	if contract != "" {
 		query = "contract = ?"
 		queryParams = []interface{}{contract}
 	}
