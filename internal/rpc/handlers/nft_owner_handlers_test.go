@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func fakeNftOwnerPaginatedHandler(r *http.Request, rq db.QueryRunner, pgQuerier db.PaginatedQuerier[ethdb.NFTOwner], query string, queryParams []interface{}) (PaginatedResponse[ethdb.NFTOwner], error) {
+func fakeQueryOwnerPage(r *http.Request, rq db.QueryRunner, pgQuerier db.PaginatedQuerier[ethdb.NFTOwner], query string, queryParams []interface{}) (PaginatedResponse[ethdb.NFTOwner], error) {
 	return PaginatedResponse[ethdb.NFTOwner]{
 		Page:     1,
 		PageSize: 10,
@@ -45,10 +45,10 @@ func checkNftOwnerResponse(t *testing.T, result interface{}) {
 
 func TestNFTOwnersGetHandler(t *testing.T) {
 	// Save the original handler and restore it after the test.
-	origHandler := PaginatedNftOwnerQueryHandlerFunc
-	PaginatedNftOwnerQueryHandlerFunc = fakeNftOwnerPaginatedHandler
+	origHandler := queryOwnerPage
+	queryOwnerPage = fakeQueryOwnerPage
 	defer func() {
-		PaginatedNftOwnerQueryHandlerFunc = origHandler
+		queryOwnerPage = origHandler
 	}()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nft_owners", nil)
@@ -64,10 +64,10 @@ func TestNFTOwnersGetHandler(t *testing.T) {
 
 func TestNFTOwnersGetHandler_WithContract(t *testing.T) {
 	// Save the original handler and restore it after the test.
-	origHandler := PaginatedNftOwnerQueryHandlerFunc
-	PaginatedNftOwnerQueryHandlerFunc = fakeNftOwnerPaginatedHandler
+	origHandler := queryOwnerPage
+	queryOwnerPage = fakeQueryOwnerPage
 	defer func() {
-		PaginatedNftOwnerQueryHandlerFunc = origHandler
+		queryOwnerPage = origHandler
 	}()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nft_owners/0xABC", nil)
@@ -82,10 +82,10 @@ func TestNFTOwnersGetHandler_WithContract(t *testing.T) {
 
 func TestNFTOwnersGetHandler_WithContractAndTokenID(t *testing.T) {
 	// Save the original handler and restore it after the test.
-	origHandler := PaginatedNftOwnerQueryHandlerFunc
-	PaginatedNftOwnerQueryHandlerFunc = fakeNftOwnerPaginatedHandler
+	origHandler := queryOwnerPage
+	queryOwnerPage = fakeQueryOwnerPage
 	defer func() {
-		PaginatedNftOwnerQueryHandlerFunc = origHandler
+		queryOwnerPage = origHandler
 	}()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nft_owners/0xABC/42", nil)

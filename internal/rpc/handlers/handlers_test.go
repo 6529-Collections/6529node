@@ -15,8 +15,6 @@ import (
 
 var globalLoggerReplaceMu sync.Mutex
 
-// TestConstantsCoverage simply references all constants and variables
-// so that the coverage tool marks them as used.
 func TestConstantsCoverage(t *testing.T) {
 	if HTTP_GET != "GET" {
 		t.Errorf("HTTP_GET constant mismatch, got %s", HTTP_GET)
@@ -31,13 +29,11 @@ func TestConstantsCoverage(t *testing.T) {
 		t.Errorf("HTTP_DELETE constant mismatch, got %s", HTTP_DELETE)
 	}
 
-	// Reference all endpoints
 	_ = StatusEndpoint
 	_ = NFTsEndpoint
 	_ = NFTTransfersEndpoint
 	_ = NFTOwnersEndpoint
 
-	// Reference SupportedVersions
 	if len(SupportedVersions) != 1 || SupportedVersions[0] != ApiV1 {
 		t.Errorf("Expected SupportedVersions to contain only ApiV1, got %v", SupportedVersions)
 	}
@@ -166,7 +162,6 @@ func TestSetupHandlers_HandlerError(t *testing.T) {
 	}
 }
 
-// TestSetupHandlers_HandlerNotFoundError ensures the "not found" error path is covered.
 func TestSetupHandlers_HandlerNotFoundError(t *testing.T) {
 	handlersMap := MethodHandlers{
 		CreateApiPath(ApiV1, "notFoundTest"): {
@@ -234,7 +229,6 @@ func TestSetupHandlers_JsonEncodingError(t *testing.T) {
 	defer zap.ReplaceGlobals(oldLogger)
 
 	testHandler := func(r *http.Request) (any, error) {
-		// JSON encoding of a channel is invalid => triggers an encode error
 		return map[string]interface{}{"badValue": make(chan int)}, nil
 	}
 
@@ -275,7 +269,6 @@ func TestSetupHandlers_UnknownPath(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// For an unregistered path, net/http returns 404 automatically.
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected status 404, got %d", resp.StatusCode)
 	}
@@ -330,7 +323,6 @@ func TestSetupHandlers_ConcurrentRequests(t *testing.T) {
 	wg.Wait()
 }
 
-// setupTestServer is a helper to attach your MethodHandlers to a test http.Server.
 func setupTestServer(t *testing.T, handlersMap MethodHandlers) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()

@@ -107,7 +107,7 @@ func GetPaginatedResponseForQuery[T Scannable](
 	queryParams []interface{},
 	factory func() T,
 ) (total int, data []T, err error) {
-	// Check order columns
+	// validate order columns
 	if len(orderColumns) == 0 {
 		return 0, nil, errors.New("no order columns provided")
 	}
@@ -132,7 +132,7 @@ func GetPaginatedResponseForQuery[T Scannable](
 	query := fmt.Sprintf("%s %s ORDER BY %s LIMIT ? OFFSET ?", baseQuery, whereClause, orderClause)
 	params := append(queryParams, queryOptions.PageSize, offset)
 
-	// Execute the main query.
+	// Execute main query
 	rows, err := rq.Query(query, params...)
 	if err != nil {
 		return 0, nil, err

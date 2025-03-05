@@ -51,7 +51,7 @@ func main() {
 	// Start TDH listening
 	if err := tdh.BlockUntilOnTipAndKeepListeningAsync(sqlite, ctx); err != nil {
 		zap.L().Error("Failed to listen on TDH contracts", zap.Error(err))
-		cancel() // Cancel main context if critical startup failed
+		cancel()
 	}
 
 	// Catch up to two signals: first for graceful, second to force
@@ -65,7 +65,7 @@ func main() {
 		zap.L().Info("Received shutdown signal, initiating graceful shutdown...")
 
 		// 1. Stop new requests on RPC
-		closeRpcServer() // If you update StartRPCServer to accept a context, pass shutdownCtx
+		closeRpcServer()
 
 		// 2. Cancel main context, telling background tasks to stop
 		cancel()

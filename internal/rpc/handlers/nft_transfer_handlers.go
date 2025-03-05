@@ -10,14 +10,15 @@ import (
 )
 
 var transferDb ethdb.NFTTransferDb = ethdb.NewTransferDb()
-var PaginatedNftTransferQueryHandlerFunc = PaginatedQueryHandler[ethdb.NFTTransfer]
+var queryTransferPage = QueryPage[ethdb.NFTTransfer]
 
 var txHashRegex = regexp.MustCompile(`^0x[0-9a-fA-F]{64}$`)
 
 func NFTTransfersGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
 	// For /api/v1/nft_transfers => parts = ["api","v1","nft_transfers"]
-	// For /api/v1/nft_transfers/ => parts = ["api","v1","nft_transfers"] (the trailing slash is trimmed)
-	// For /api/v1/nfts/0xABC/42 => parts = ["api","v1","nfts","0xABC","42"]
+	// For /api/v1/nft_transfers/<txHash> => parts = ["api","v1","nft_transfers","<txHash>"]
+	// For /api/v1/nft_transfers/<contract> => parts = ["api","v1","nft_transfers","<contract>"]
+	// For /api/v1/nft_transfers/<contract>/<tokenID> => parts = ["api","v1","nft_transfers","<contract>","<tokenID>"]
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 
 	txHash := ""
@@ -50,5 +51,5 @@ func NFTTransfersGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
 		queryParams = []interface{}{contract}
 	}
 
-	return PaginatedNftTransferQueryHandlerFunc(r, db, transferDb, query, queryParams)
+	return queryTransferPage(r, db, transferDb, query, queryParams)
 }

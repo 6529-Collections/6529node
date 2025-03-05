@@ -9,13 +9,11 @@ import (
 	"github.com/6529-Collections/6529node/pkg/tdh/models"
 )
 
-// fakeScanner is a test double that implements the db.RowScanner interface.
 type fakeScanner struct {
 	values []interface{}
 	err    error
 }
 
-// Scan copies fake values into the passed pointers or returns a preset error.
 func (f *fakeScanner) Scan(dest ...interface{}) error {
 	if f.err != nil {
 		return f.err
@@ -51,7 +49,6 @@ func (f *fakeScanner) Scan(dest ...interface{}) error {
 }
 
 func TestNFTScanRow_Success(t *testing.T) {
-	// Prepare fake data for NFT: Contract, TokenID, Supply, BurntSupply.
 	scanner := &fakeScanner{
 		values: []interface{}{"0xABCDEF", "123", uint64(100), uint64(5)},
 	}
@@ -76,7 +73,6 @@ func TestNFTScanRow_Success(t *testing.T) {
 }
 
 func TestNFTScanRow_NoRows(t *testing.T) {
-	// Simulate a no-rows condition.
 	scanner := &fakeScanner{
 		err: sql.ErrNoRows,
 	}
@@ -88,7 +84,6 @@ func TestNFTScanRow_NoRows(t *testing.T) {
 }
 
 func TestNFTScanRow_Error(t *testing.T) {
-	// Simulate an error other than sql.ErrNoRows.
 	scanner := &fakeScanner{
 		err: errors.New("scan error"),
 	}
@@ -103,7 +98,6 @@ func TestNFTScanRow_Error(t *testing.T) {
 }
 
 func TestNFTOwnerScanRow_Success(t *testing.T) {
-	// Prepare fake data for NFTOwner: Owner, Contract, TokenID, TokenUniqueID, Timestamp.
 	scanner := &fakeScanner{
 		values: []interface{}{"0xOwner", "0xContract", "456", uint64(789), uint64(161718)},
 	}
@@ -156,9 +150,6 @@ func TestNFTOwnerScanRow_Error(t *testing.T) {
 }
 
 func TestNFTTransferScanRow_Success(t *testing.T) {
-	// Prepare fake data for NFTTransfer:
-	// BlockNumber, TransactionIndex, LogIndex, TxHash, EventName, From, To,
-	// Contract, TokenID, TokenUniqueID, BlockTime, Type.
 	expectedType := models.TransferType("1")
 	scanner := &fakeScanner{
 		values: []interface{}{
@@ -245,8 +236,6 @@ func TestNFTTransferScanRow_Error(t *testing.T) {
 	}
 }
 
-// Since TokenTransferCheckpoint is just a struct without any methods,
-// a basic test to instantiate it is enough for coverage.
 func TestTokenTransferCheckpoint(t *testing.T) {
 	ttc := TokenTransferCheckpoint{
 		ID:               1,

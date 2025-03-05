@@ -9,12 +9,12 @@ import (
 )
 
 var nftDb ethdb.NFTDb = ethdb.NewNFTDb()
-var PaginatedNftQueryHandlerFunc = PaginatedQueryHandler[ethdb.NFT]
+var queryNftPage = QueryPage[ethdb.NFT]
 
 func NFTsGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
 	// For /api/v1/nfts => parts = ["api","v1","nfts"]
-	// For /api/v1/nfts/ => parts = ["api","v1","nfts"] (the trailing slash is trimmed)
-	// For /api/v1/nfts/0xABC/42 => parts = ["api","v1","nfts","0xABC","42"]
+	// For /api/v1/nfts/<contract> => parts = ["api","v1","nfts","<contract>"]
+	// For /api/v1/nfts/<contract>/<tokenID> => parts = ["api","v1","nfts","<contract>","<tokenID>"]
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 
 	contract := ""
@@ -38,5 +38,5 @@ func NFTsGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
 		queryParams = []interface{}{contract}
 	}
 
-	return PaginatedNftQueryHandlerFunc(r, db, nftDb, query, queryParams)
+	return queryNftPage(r, db, nftDb, query, queryParams)
 }

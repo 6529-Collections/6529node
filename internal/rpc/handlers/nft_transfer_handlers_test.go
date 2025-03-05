@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func fakeNftTransferPaginatedHandler(r *http.Request, rq db.QueryRunner, pgQuerier db.PaginatedQuerier[ethdb.NFTTransfer], query string, queryParams []interface{}) (PaginatedResponse[ethdb.NFTTransfer], error) {
+func fakeQueryTransferPage(r *http.Request, rq db.QueryRunner, pgQuerier db.PaginatedQuerier[ethdb.NFTTransfer], query string, queryParams []interface{}) (PaginatedResponse[ethdb.NFTTransfer], error) {
 	return PaginatedResponse[ethdb.NFTTransfer]{
 		Page:     1,
 		PageSize: 10,
@@ -45,10 +45,10 @@ func checkNftTransferPaginatedResponse(t *testing.T, result interface{}) {
 
 func TestNFTTransfersGetHandler(t *testing.T) {
 	// Save the original handler and restore it after the test.
-	origHandler := PaginatedNftTransferQueryHandlerFunc
-	PaginatedNftTransferQueryHandlerFunc = fakeNftTransferPaginatedHandler
+	origHandler := queryTransferPage
+	queryTransferPage = fakeQueryTransferPage
 	defer func() {
-		PaginatedNftTransferQueryHandlerFunc = origHandler
+		queryTransferPage = origHandler
 	}()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nft_transfers", nil)
@@ -63,10 +63,10 @@ func TestNFTTransfersGetHandler(t *testing.T) {
 
 func TestNFTTransfersGetHandler_WithContract(t *testing.T) {
 	// Save the original handler and restore it after the test.
-	origHandler := PaginatedNftTransferQueryHandlerFunc
-	PaginatedNftTransferQueryHandlerFunc = fakeNftTransferPaginatedHandler
+	origHandler := queryTransferPage
+	queryTransferPage = fakeQueryTransferPage
 	defer func() {
-		PaginatedNftTransferQueryHandlerFunc = origHandler
+		queryTransferPage = origHandler
 	}()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nft_transfers/0xABC", nil)
@@ -81,10 +81,10 @@ func TestNFTTransfersGetHandler_WithContract(t *testing.T) {
 
 func TestNFTTransfersGetHandler_WithContractAndTokenID(t *testing.T) {
 	// Save the original handler and restore it after the test.
-	origHandler := PaginatedNftTransferQueryHandlerFunc
-	PaginatedNftTransferQueryHandlerFunc = fakeNftTransferPaginatedHandler
+	origHandler := queryTransferPage
+	queryTransferPage = fakeQueryTransferPage
 	defer func() {
-		PaginatedNftTransferQueryHandlerFunc = origHandler
+		queryTransferPage = origHandler
 	}()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nft_transfers/0xABC/42", nil)
@@ -100,10 +100,10 @@ func TestNFTTransfersGetHandler_WithContractAndTokenID(t *testing.T) {
 
 func TestNFTTransfersGetHandler_WithTxHash(t *testing.T) {
 	// Save the original handler and restore it after the test.
-	origHandler := PaginatedNftTransferQueryHandlerFunc
-	PaginatedNftTransferQueryHandlerFunc = fakeNftTransferPaginatedHandler
+	origHandler := queryTransferPage
+	queryTransferPage = fakeQueryTransferPage
 	defer func() {
-		PaginatedNftTransferQueryHandlerFunc = origHandler
+		queryTransferPage = origHandler
 	}()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nft_transfers/0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", nil)

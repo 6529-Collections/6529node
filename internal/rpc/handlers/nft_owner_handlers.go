@@ -9,12 +9,12 @@ import (
 )
 
 var ownerDb ethdb.NFTOwnerDb = ethdb.NewOwnerDb()
-var PaginatedNftOwnerQueryHandlerFunc = PaginatedQueryHandler[ethdb.NFTOwner]
+var queryOwnerPage = QueryPage[ethdb.NFTOwner]
 
 func NFTOwnersGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
 	// For /api/v1/nft_owners => parts = ["api","v1","nft_owners"]
-	// For /api/v1/nft_owners/ => parts = ["api","v1","nft_owners"] (the trailing slash is trimmed)
-	// For /api/v1/nfts/0xABC/42 => parts = ["api","v1","nfts","0xABC","42"]
+	// For /api/v1/nft_owners/<contract> => parts = ["api","v1","nft_owners","<contract>"]
+	// For /api/v1/nft_owners/<contract>/<tokenID> => parts = ["api","v1","nft_owners","<contract>","<tokenID>"]
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 
 	contract := ""
@@ -37,5 +37,5 @@ func NFTOwnersGetHandler(r *http.Request, db *sql.DB) (interface{}, error) {
 		queryParams = []interface{}{contract}
 	}
 
-	return PaginatedNftOwnerQueryHandlerFunc(r, db, ownerDb, query, queryParams)
+	return queryOwnerPage(r, db, ownerDb, query, queryParams)
 }

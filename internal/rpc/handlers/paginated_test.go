@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/6529-Collections/6529node/internal/db"
-	"github.com/stretchr/testify/assert"
 )
 
 //------------------//
@@ -61,13 +60,8 @@ func (m *mockPaginatedQuerier[T]) GetPaginatedResponseForQuery(
 
 func TestReturnPaginatedData(t *testing.T) {
 	t.Run("HTTP, page=1 => no prev, has next", func(t *testing.T) {
-		resp := PaginatedResponse[string]{
-			Page:     1,
-			PageSize: 10,
-		}
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/api/v1/test", nil)
-		// total bigger so next is available
-		resp.ReturnPaginatedData(req, 100)
+		resp := NewPaginatedResponse[string](req, 1, 10, 100, nil)
 
 		if resp.Prev != nil {
 			t.Errorf("Expected Prev to be nil, got %v", *resp.Prev)
@@ -81,13 +75,8 @@ func TestReturnPaginatedData(t *testing.T) {
 	})
 
 	t.Run("HTTPS, page=2 => has prev, no next if offsetEnd >= total", func(t *testing.T) {
-		resp := PaginatedResponse[string]{
-			Page:     2,
-			PageSize: 10,
-		}
 		req := httptest.NewRequest(http.MethodGet, "https://example.com/api/v1/test", nil)
-		// offsetEnd = (2-1)*10 + 10 = 20, so total=20 => no next
-		resp.ReturnPaginatedData(req, 20)
+		resp := NewPaginatedResponse[string](req, 2, 10, 20, nil)
 
 		if resp.Prev == nil {
 			t.Errorf("Expected Prev to be non-nil, got nil")
@@ -101,10 +90,10 @@ func TestReturnPaginatedData(t *testing.T) {
 	})
 }
 
-func TestExtractPagination(t *testing.T) {
+func TestGetPaginationParams(t *testing.T) {
 	t.Run("Valid page & page_size", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://example.com?page=3&page_size=15", nil)
-		page, pageSize, err := ExtractPagination(req)
+		page, pageSize, err := GetPaginationParams(req)
 		if err != nil {
 			t.Errorf("Expected no error, got %v", err)
 		}
@@ -118,7 +107,7 @@ func TestExtractPagination(t *testing.T) {
 
 	t.Run("Missing params => defaults to 1 and 10", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://example.com", nil)
-		page, pageSize, err := ExtractPagination(req)
+		page, pageSize, err := GetPaginationParams(req)
 		if err != nil {
 			t.Errorf("Expected no error, got %v", err)
 		}
@@ -132,7 +121,7 @@ func TestExtractPagination(t *testing.T) {
 
 	t.Run("Invalid page => fallback to 1, but err is returned from Atoi", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://example.com?page=abc&page_size=xyz", nil)
-		page, pageSize, err := ExtractPagination(req)
+		page, pageSize, err := GetPaginationParams(req)
 		if page != 1 {
 			t.Errorf("Expected fallback page=1, got %d", page)
 		}
@@ -146,41 +135,6 @@ func TestExtractPagination(t *testing.T) {
 	})
 }
 
-func TestConvertStructToMap(t *testing.T) {
-	t.Run("Successful conversion", func(t *testing.T) {
-		type sample struct {
-			Name  string `json:"name"`
-			Count int    `json:"count"`
-		}
-		s := sample{Name: "Alice", Count: 42}
-		m, err := ConvertStructToMap(s)
-		if err != nil {
-			t.Errorf("Expected no error, got %v", err)
-		}
-		if m["name"] != "Alice" || m["count"] != float64(42) {
-			t.Errorf("Expected map[name:Alice count:42], got %v", m)
-		}
-	})
-
-	t.Run("Failing marshal", func(t *testing.T) {
-		// Functions/channels/etc. cannot be marshaled by encoding/json
-		type failing struct {
-			Fn func() string `json:"fn"`
-		}
-		f := failing{Fn: func() string { return "hello" }}
-		m, err := ConvertStructToMap(f)
-		if err == nil {
-			t.Errorf("Expected error from JSON marshal, got nil with map %v", m)
-		}
-	})
-}
-
-func TestConvertStructToMap_UnmarshalError(t *testing.T) {
-	_, err := ConvertStructToMap([]byte("lala"))
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "json: cannot unmarshal string into Go")
-}
-
 func TestPaginatedQueryHandler(t *testing.T) {
 	t.Run("Successful Query", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://example.com?page=2&page_size=5", nil)
@@ -192,7 +146,7 @@ func TestPaginatedQueryHandler(t *testing.T) {
 
 		mockQueryRunner := &mockQueryRunner{}
 
-		resp, err := PaginatedQueryHandler[string](
+		resp, err := QueryPage[string](
 			req,
 			mockQueryRunner,
 			mockQuerier,
@@ -230,7 +184,7 @@ func TestPaginatedQueryHandler(t *testing.T) {
 			Err: errors.New("some DB error"),
 		}
 
-		resp, err := PaginatedQueryHandler[string](
+		resp, err := QueryPage[string](
 			req,
 			&mockQueryRunner{},
 			mockQuerier,

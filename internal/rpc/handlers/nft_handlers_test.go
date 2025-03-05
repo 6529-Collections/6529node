@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func fakeNftPaginatedHandler(r *http.Request, rq db.QueryRunner, pgQuerier db.PaginatedQuerier[ethdb.NFT], query string, queryParams []interface{}) (PaginatedResponse[ethdb.NFT], error) {
+func fakeQueryNftPage(r *http.Request, rq db.QueryRunner, pgQuerier db.PaginatedQuerier[ethdb.NFT], query string, queryParams []interface{}) (PaginatedResponse[ethdb.NFT], error) {
 	return PaginatedResponse[ethdb.NFT]{
 		Page:     1,
 		PageSize: 10,
@@ -43,10 +43,10 @@ func checkNftPaginatedResponse(t *testing.T, result interface{}) {
 }
 
 func TestNFTsGetHandler(t *testing.T) {
-	origHandler := PaginatedNftQueryHandlerFunc
-	PaginatedNftQueryHandlerFunc = fakeNftPaginatedHandler
+	origHandler := queryNftPage
+	queryNftPage = fakeQueryNftPage
 	defer func() {
-		PaginatedNftQueryHandlerFunc = origHandler
+		queryNftPage = origHandler
 	}()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nfts", nil)
@@ -60,10 +60,10 @@ func TestNFTsGetHandler(t *testing.T) {
 }
 
 func TestNFTsGetHandler_WithContract(t *testing.T) {
-	origHandler := PaginatedNftQueryHandlerFunc
-	PaginatedNftQueryHandlerFunc = fakeNftPaginatedHandler
+	origHandler := queryNftPage
+	queryNftPage = fakeQueryNftPage
 	defer func() {
-		PaginatedNftQueryHandlerFunc = origHandler
+		queryNftPage = origHandler
 	}()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nfts/0xABC", nil)

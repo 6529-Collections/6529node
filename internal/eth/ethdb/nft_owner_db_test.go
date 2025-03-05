@@ -33,11 +33,10 @@ func setupTestOwnerDb(t *testing.T) (*sql.DB, NFTOwnerDb, NFTDb, func()) {
 	return db, ownerDb, nftDb, cleanup
 }
 
-// createNftInDB is a helper that ensures a record in 'nfts' table
-// so we can insert into 'nft_owners' (which references it).
 func createNftInDB(t *testing.T, db *sql.DB, nftDb NFTDb, contract, tokenID string) {
 	tx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
+
 	// Use UpdateSupply once to create an NFT with supply=1
 	_, err = nftDb.UpdateSupply(tx, contract, tokenID)
 	require.NoError(t, err, "failed to create NFT in nfts table")
