@@ -1,6 +1,7 @@
 package mempool
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 
@@ -32,10 +33,11 @@ func TestMempoolConcurrency(t *testing.T) {
 	concurrency := 20
 	wg.Add(concurrency)
 	for i := 0; i < concurrency; i++ {
-		go func() {
+		go func(id int) {
 			defer wg.Done()
-			_ = mp.AddTransaction(&Transaction{ID: "txConcurrency", Fee: 5})
-		}()
+			txID := fmt.Sprintf("txConcurrency-%d", id)
+			_ = mp.AddTransaction(&Transaction{ID: txID, Fee: 5})
+		}(i)
 	}
 	wg.Wait()
 	assert.Equal(t, concurrency, mp.Size())

@@ -44,24 +44,19 @@ func (m *mempoolImpl) AddTransaction(tx *Transaction) error {
 }
 
 func (m *mempoolImpl) GetTransactionsForBlock(maxCount int) []*Transaction {
-	m.mu.RLock()
-	size := len(m.pq)
-	m.mu.RUnlock()
-	zap.L().Info("GetTransactionsForBlock called", zap.Int("maxCount", maxCount))
-
-	if size == 0 {
-		return nil
-	}
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	zap.L().Info("GetTransactionsForBlock called", zap.Int("maxCount", maxCount))
+	if len(m.pq) == 0 {
+		return nil
+	}
 
 	var popped []*Transaction
 	for i := 0; i < maxCount && m.pq.Len() > 0; i++ {
 		top := heap.Pop(&m.pq).(*Transaction)
 		popped = append(popped, top)
 	}
-
 	for _, tx := range popped {
 		heap.Push(&m.pq, tx)
 	}
