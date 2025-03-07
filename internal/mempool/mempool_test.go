@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -27,6 +28,10 @@ func TestMempoolInterface(t *testing.T) {
 
 	err = mp.ReinjectOrphanedTxs(blockTxs)
 	assert.NoError(t, err)
+
+	// Clean up goroutine
+	mpImpl := mp.(*mempoolImpl)
+	mpImpl.Stop()
 }
 
 func TestMempoolConcurrency(t *testing.T) {
@@ -44,8 +49,12 @@ func TestMempoolConcurrency(t *testing.T) {
 	}
 	wg.Wait()
 
-	// If all are valid, we should see them in the queue (plus stale items)
+	// If all are valid, we should see them in the queue (plus stale items).
+	// Because we haven't removed anything, size should match concurrency in the PQ.
 	assert.Equal(t, concurrency, mp.Size())
+
+	mpImpl := mp.(*mempoolImpl)
+	mpImpl.Stop()
 }
 
 func TestMempoolPriority(t *testing.T) {
@@ -62,6 +71,9 @@ func TestMempoolPriority(t *testing.T) {
 	assert.Equal(t, "lowFee", txs[2].ID)
 	// The PQ is re-pushed so Size() is still 3
 	assert.Equal(t, 3, mp.Size())
+
+	mpImpl := mp.(*mempoolImpl)
+	mpImpl.Stop()
 }
 
 func TestMempoolValidation(t *testing.T) {
@@ -86,6 +98,9 @@ func TestMempoolValidation(t *testing.T) {
 	err = mp.AddTransaction(&Transaction{ID: "txValid", Fee: 5})
 	assert.NoError(t, err)
 	assert.Equal(t, 1, mp.Size())
+
+	mpImpl := mp.(*mempoolImpl)
+	mpImpl.Stop()
 }
 
 func TestRemoveTransactionsActualBehavior(t *testing.T) {
@@ -109,4 +124,62 @@ func TestRemoveTransactionsActualBehavior(t *testing.T) {
 
 	// The queue is still full of stale references
 	assert.Equal(t, 2, mp.Size())
+
+	mpImpl := mp.(*mempoolImpl)
+	mpImpl.Stop()
+}
+
+func TestMempoolCapacityEviction(t *testing.T) {
+	mp := NewMempool()
+	mpImpl := mp.(*mempoolImpl)
+	mpImpl.maxSize = 2 // small capacity for testing
+
+	// Add two transactions
+	_ = mp.AddTransaction(&Transaction{ID: "A", Fee: 10})
+	_ = mp.AddTransaction(&Transaction{ID: "B", Fee: 20})
+	assert.Equal(t, 2, len(mpImpl.txMap))
+
+	// Attempt to add a lower-fee transaction -> should be rejected
+	err := mp.AddTransaction(&Transaction{ID: "C", Fee: 5})
+	assert.Equal(t, ErrMempoolFull, err)
+	assert.Equal(t, 2, len(mpImpl.txMap))
+
+	// Add a higher-fee transaction -> should evict the lowest (A with fee=10)
+	err = mp.AddTransaction(&Transaction{ID: "D", Fee: 30})
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(mpImpl.txMap))
+
+	// Confirm "A" was evicted, "B" and "D" remain
+	_, aExists := mpImpl.txMap["A"]
+	_, bExists := mpImpl.txMap["B"]
+	_, dExists := mpImpl.txMap["D"]
+	assert.False(t, aExists)
+	assert.True(t, bExists)
+	assert.True(t, dExists)
+
+	mpImpl.Stop()
+}
+
+func TestMempoolTTLEviction(t *testing.T) {
+	mp := NewMempool()
+	mpImpl := mp.(*mempoolImpl)
+
+	// Lower the TTL so it expires quickly
+	mpImpl.ttlSeconds = 1
+
+	// Add a transaction
+	err := mp.AddTransaction(&Transaction{ID: "X", Fee: 10})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(mpImpl.txMap))
+
+	// Sleep so TTL can expire
+	time.Sleep(2 * time.Second)
+
+	// Force a manual eviction call (the background goroutine also does this,
+	// but we want a deterministic test).
+	mpImpl.evictExpired()
+
+	assert.Equal(t, 0, len(mpImpl.txMap))
+
+	mpImpl.Stop()
 }
