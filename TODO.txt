@@ -1,6 +1,0 @@
-TODO:
-
-* Integrate coverage to CI and make sure the HTML output is uploaded to the PR
-* Make so that the coverage fails the build if it's below a certain threshold
-* Make a release workflow that builds the app and uploads the binaries to the release
-* Make sure DCO works
