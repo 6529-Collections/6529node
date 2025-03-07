@@ -21,10 +21,8 @@ func TestMempoolInterface(t *testing.T) {
 	assert.Equal(t, "tx123", blockTxs[0].ID)
 
 	mp.RemoveTransactions(blockTxs)
-	// Currently we do lazy removal from the priority queue
-	// so Size() still reflects the PQ length.
-	// If we popped from the PQ earlier, they'd remain in the queue data structure
-	// but are removed from txMap. This is expected in our approach.
+	// Lazy removal means the PQ still has one stale reference,
+	// so Size() remains 1.
 	assert.Equal(t, 1, mp.Size())
 
 	err = mp.ReinjectOrphanedTxs(blockTxs)
@@ -46,8 +44,7 @@ func TestMempoolConcurrency(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Some or all might fail if they triggered invalid format or insufficient fee checks;
-	// but here we used valid IDs and Fee=5 with baseFee=1, so all should succeed.
+	// If all are valid, we should see them in the queue (plus stale items)
 	assert.Equal(t, concurrency, mp.Size())
 }
 
@@ -58,10 +55,12 @@ func TestMempoolPriority(t *testing.T) {
 	_ = mp.AddTransaction(&Transaction{ID: "highFee", Fee: 50})
 
 	txs := mp.GetTransactionsForBlock(3)
+	// Should see them in descending fee order
 	assert.Len(t, txs, 3)
 	assert.Equal(t, "highFee", txs[0].ID)
 	assert.Equal(t, "midFee", txs[1].ID)
 	assert.Equal(t, "lowFee", txs[2].ID)
+	// The PQ is re-pushed so Size() is still 3
 	assert.Equal(t, 3, mp.Size())
 }
 
@@ -87,4 +86,27 @@ func TestMempoolValidation(t *testing.T) {
 	err = mp.AddTransaction(&Transaction{ID: "txValid", Fee: 5})
 	assert.NoError(t, err)
 	assert.Equal(t, 1, mp.Size())
+}
+
+func TestRemoveTransactionsActualBehavior(t *testing.T) {
+	mp := NewMempool()
+	_ = mp.AddTransaction(&Transaction{ID: "A", Fee: 10})
+	_ = mp.AddTransaction(&Transaction{ID: "B", Fee: 20})
+
+	assert.Equal(t, 2, mp.Size())
+
+	blockTxs := mp.GetTransactionsForBlock(2)
+	assert.Len(t, blockTxs, 2)
+
+	mp.RemoveTransactions([]*Transaction{{ID: "A"}, {ID: "B"}})
+
+	// Stale references remain in the queue, so Size() stays 2
+	assert.Equal(t, 2, mp.Size())
+
+	nextBlockTxs := mp.GetTransactionsForBlock(2)
+	// Because A and B are removed from txMap, the mempool won't return them
+	assert.Len(t, nextBlockTxs, 0)
+
+	// The queue is still full of stale references
+	assert.Equal(t, 2, mp.Size())
 }

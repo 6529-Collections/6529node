@@ -40,7 +40,8 @@ func NewMempool() Mempool {
 	return &mempoolImpl{
 		txMap:   make(map[string]*Transaction),
 		pq:      make(txPriorityQueue, 0),
-		baseFee: 1}
+		baseFee: 1, // minimal fee
+	}
 }
 
 func (m *mempoolImpl) AddTransaction(tx *Transaction) error {
@@ -64,21 +65,27 @@ func (m *mempoolImpl) GetTransactionsForBlock(maxCount int) []*Transaction {
 	defer m.mu.Unlock()
 
 	zap.L().Info("GetTransactionsForBlock called", zap.Int("maxCount", maxCount))
-	if len(m.pq) == 0 {
-		return nil
-	}
 
+	// Pop up to maxCount items from the priority queue
 	var popped []*Transaction
 	for i := 0; i < maxCount && m.pq.Len() > 0; i++ {
 		top := heap.Pop(&m.pq).(*Transaction)
 		popped = append(popped, top)
 	}
 
+	// Now we re-push all popped items, but only *after* we've collected them.
+	// This ensures we do a single pass over the queue and preserve the original order.
+	// We do NOT skip re-pushing stale items, because the tests expect "lazy removal"
+	// to keep the pq size the same. However, we only return items that are still in the map.
+	var results []*Transaction
 	for _, tx := range popped {
 		heap.Push(&m.pq, tx)
+		if _, stillValid := m.txMap[tx.ID]; stillValid {
+			results = append(results, tx)
+		}
 	}
 
-	return popped
+	return results
 }
 
 func (m *mempoolImpl) RemoveTransactions(txs []*Transaction) {
@@ -94,6 +101,8 @@ func (m *mempoolImpl) RemoveTransactions(txs []*Transaction) {
 func (m *mempoolImpl) Size() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	// We are returning the size of the queue (including stale).
+	// This matches the tests, which expect "lazy removal".
 	return len(m.pq)
 }
 
@@ -129,7 +138,6 @@ func (m *mempoolImpl) validateTransaction(tx *Transaction) error {
 // stubSignatureValid simulates a signature check.
 // Extend this with real cryptographic signature verification later
 func stubSignatureValid(tx *Transaction) bool {
-	// For demonstration: treat "invalid-sig" as a marker for a bad signature
 	if tx.ID == "invalid-sig" {
 		return false
 	}
@@ -142,8 +150,8 @@ func (pq txPriorityQueue) Len() int {
 	return len(pq)
 }
 
+// We want a max-heap by Fee: higher fee => higher priority
 func (pq txPriorityQueue) Less(i, j int) bool {
-	// higher fee = higher priority
 	return pq[i].Fee > pq[j].Fee
 }
 
