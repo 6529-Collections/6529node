@@ -186,7 +186,7 @@ func (m *mempoolImpl) validateTransaction(tx *Transaction) error {
 	if tx.ID == "" {
 		return ErrInvalidFormat
 	}
-	if !stubSignatureValid(tx) {
+	if !isSignatureValid(tx) {
 		return ErrInvalidSignature
 	}
 	if tx.Fee < m.baseFee {
@@ -195,7 +195,8 @@ func (m *mempoolImpl) validateTransaction(tx *Transaction) error {
 	return nil
 }
 
-func stubSignatureValid(tx *Transaction) bool {
+func isSignatureValid(tx *Transaction) bool {
+	// TODO Replace with actual signature validation
 	return tx.ID != "invalid-sig"
 }
 

@@ -156,11 +156,6 @@ func TestMempoolTTLEviction(t *testing.T) {
 	mpImpl.Stop()
 }
 
-/* ========================
-   ADDITIONAL TEST CASES
-   ======================== */
-
-/* 1. Concurrency: Interleaving Add & Get */
 func TestMempoolConcurrentAddAndGet(t *testing.T) {
 	mp := NewMempool()
 	mpImpl := mp.(*mempoolImpl)
@@ -172,7 +167,6 @@ func TestMempoolConcurrentAddAndGet(t *testing.T) {
 
 	wg.Add(concurrencyAdd + concurrencyGet)
 
-	// Goroutines that add transactions
 	for i := 0; i < concurrencyAdd; i++ {
 		go func(id int) {
 			defer wg.Done()
@@ -183,7 +177,6 @@ func TestMempoolConcurrentAddAndGet(t *testing.T) {
 		}(i)
 	}
 
-	// Goroutines that concurrently call GetTransactionsForBlock
 	for i := 0; i < concurrencyGet; i++ {
 		go func(id int) {
 			defer wg.Done()
@@ -202,7 +195,6 @@ func TestMempoolConcurrentAddAndGet(t *testing.T) {
 	mpImpl.Stop()
 }
 
-/* 2. Eviction at the Boundary: Same-Fee Ties */
 func TestMempoolEvictionSameFeeTie(t *testing.T) {
 	mp := NewMempool()
 	mpImpl := mp.(*mempoolImpl)
@@ -212,7 +204,6 @@ func TestMempoolEvictionSameFeeTie(t *testing.T) {
 	_ = mp.AddTransaction(&Transaction{ID: "tx2", Fee: 10})
 	assert.Equal(t, 2, len(mpImpl.txMap))
 
-	// Now add a 3rd transaction with the same fee=10
 	err := mp.AddTransaction(&Transaction{ID: "tx3", Fee: 10})
 	assert.Equal(t, ErrMempoolFull, err, "Ties should cause rejection since new fee <= lowest fee")
 	assert.Equal(t, 2, len(mpImpl.txMap))
@@ -220,20 +211,16 @@ func TestMempoolEvictionSameFeeTie(t *testing.T) {
 	mpImpl.Stop()
 }
 
-/* 3. RemoveTransactions on Non-Existent Tx */
 func TestMempoolRemoveTransactionsNonExistent(t *testing.T) {
 	mp := NewMempool()
 
-	// Add one
 	err := mp.AddTransaction(&Transaction{ID: "txA", Fee: 10})
 	assert.NoError(t, err)
 	assert.Equal(t, 1, mp.Size())
 
-	// Remove it
 	mp.RemoveTransactions([]*Transaction{{ID: "txA"}})
 	assert.Equal(t, 1, mp.Size()) // stale reference in PQ
 
-	// Remove it again (non-existent in txMap)
 	assert.NotPanics(t, func() {
 		mp.RemoveTransactions([]*Transaction{{ID: "txA"}})
 	})
@@ -242,7 +229,6 @@ func TestMempoolRemoveTransactionsNonExistent(t *testing.T) {
 	mpImpl.Stop()
 }
 
-/* 4. ReinjectOrphanedTxs at Capacity */
 func TestMempoolReinjectOrphanedTxsAtCapacity(t *testing.T) {
 	mp := NewMempool()
 	mpImpl := mp.(*mempoolImpl)
@@ -260,17 +246,11 @@ func TestMempoolReinjectOrphanedTxsAtCapacity(t *testing.T) {
 	err := mp.ReinjectOrphanedTxs(orphanTxs)
 	assert.NoError(t, err)
 
-	// Should have replaced the lowest fee (5 < 10 is also low, so it won't replace anything)
-	// "orphan1" is smaller fee => likely rejected
-	// "orphan2" is bigger fee => it should evict "origA" (fee=10)
-
 	_, hasOrigA := mpImpl.txMap["origA"]
 	_, hasOrigB := mpImpl.txMap["origB"]
 	_, hasOrphan1 := mpImpl.txMap["orphan1"]
 	_, hasOrphan2 := mpImpl.txMap["orphan2"]
 
-	// "origA" with fee=10 should have been evicted by "orphan2" with fee=30
-	// "orphan1" with fee=5 should be rejected
 	assert.False(t, hasOrigA, "origA should be evicted by orphan2 (fee=30)")
 	assert.True(t, hasOrigB, "origB (fee=20) remains")
 	assert.False(t, hasOrphan1, "orphan1 (fee=5) is too low, so not injected")
@@ -279,7 +259,6 @@ func TestMempoolReinjectOrphanedTxsAtCapacity(t *testing.T) {
 	mpImpl.Stop()
 }
 
-/* 5. TTL Eviction Boundaries */
 func TestMempoolTTLEvictionBoundary(t *testing.T) {
 	mp := NewMempool()
 	mpImpl := mp.(*mempoolImpl)
@@ -289,20 +268,18 @@ func TestMempoolTTLEvictionBoundary(t *testing.T) {
 	assert.NoError(t, err)
 
 	time.Sleep(500 * time.Millisecond)
-	// We expect it's not evicted yet
-	mpImpl.evictExpired() // force eviction check
+	mpImpl.evictExpired()
 	_, exists := mpImpl.txMap["boundaryTx"]
 	assert.True(t, exists, "Tx should still be in the pool because TTL not fully elapsed")
 
 	time.Sleep(600 * time.Millisecond)
-	mpImpl.evictExpired() // now total ~1.1s elapsed
+	mpImpl.evictExpired()
 	_, exists = mpImpl.txMap["boundaryTx"]
 	assert.False(t, exists, "Tx should be evicted after exceeding 1s TTL")
 
 	mpImpl.Stop()
 }
 
-/* 6. Request More Transactions Than Exist */
 func TestMempoolRequestMoreTransactionsThanExist(t *testing.T) {
 	mp := NewMempool()
 	_ = mp.AddTransaction(&Transaction{ID: "txOne", Fee: 10})
@@ -319,7 +296,6 @@ func TestMempoolRequestMoreTransactionsThanExist(t *testing.T) {
 	mpImpl.Stop()
 }
 
-/* 7. Large Parallel Insertions & Capacity Pressure */
 func TestMempoolLargeParallelInsertions(t *testing.T) {
 	mp := NewMempool()
 	mpImpl := mp.(*mempoolImpl)
@@ -342,44 +318,33 @@ func TestMempoolLargeParallelInsertions(t *testing.T) {
 
 	finalMapSize := len(mpImpl.txMap)
 	assert.LessOrEqual(t, finalMapSize, 20, "Mempool should never exceed maxSize")
-
-	// Optionally, confirm we only keep the top 20 fees
-	// We'll do a quick check: no fee in the map should be less than a fee outside the map
-	// This is more involved if we want guaranteed correctness, but basic check suffices.
-
 	mpImpl.Stop()
 }
 
-/* 8. Integrity Check After Multiple Block Creations */
 func TestMempoolMultiBlockCycle(t *testing.T) {
 	mp := NewMempool()
 	mpImpl := mp.(*mempoolImpl)
 	mpImpl.maxSize = 10
 
-	// Add 5 transactions
 	for i := 0; i < 5; i++ {
 		txID := fmt.Sprintf("blockCycle-%d", i)
 		_ = mp.AddTransaction(&Transaction{ID: txID, Fee: uint64(i + 1)})
 	}
 	assert.Equal(t, 5, mp.Size())
 
-	// Simulate block creation: retrieve top 3
 	blockTxs1 := mp.GetTransactionsForBlock(3)
 	assert.Len(t, blockTxs1, 3)
 	mp.RemoveTransactions(blockTxs1)
 
-	// Add 2 more transactions
 	for i := 5; i < 7; i++ {
 		txID := fmt.Sprintf("blockCycle-%d", i)
 		_ = mp.AddTransaction(&Transaction{ID: txID, Fee: uint64(i + 1)})
 	}
 
-	// Retrieve top 3 again
 	blockTxs2 := mp.GetTransactionsForBlock(3)
 	assert.True(t, len(blockTxs2) <= 4, "We had 2 leftover + 2 new = 4 total")
 	mp.RemoveTransactions(blockTxs2)
 
-	// Ensure no panics or weird leftover states
 	leftAfter := mp.GetTransactionsForBlock(10)
 	assert.True(t, len(leftAfter) <= 2, "At most 2 remain if fewer than 3 were removed previously")
 
