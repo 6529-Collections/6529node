@@ -178,7 +178,7 @@ func TestMempoolConcurrentAddAndGet(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
 				txID := fmt.Sprintf("txConAdd-%d-%d", id, j)
-				_ = mp.AddTransaction(&Transaction{ID: txID, Fee: uint64(rand.Intn(100)+1)})
+				_ = mp.AddTransaction(&Transaction{ID: txID, Fee: uint64(rand.Intn(100) + 1)})
 			}
 		}(i)
 	}
@@ -305,8 +305,8 @@ func TestMempoolTTLEvictionBoundary(t *testing.T) {
 /* 6. Request More Transactions Than Exist */
 func TestMempoolRequestMoreTransactionsThanExist(t *testing.T) {
 	mp := NewMempool()
-	mp.AddTransaction(&Transaction{ID: "txOne", Fee: 10})
-	mp.AddTransaction(&Transaction{ID: "txTwo", Fee: 5})
+	_ = mp.AddTransaction(&Transaction{ID: "txOne", Fee: 10})
+	_ = mp.AddTransaction(&Transaction{ID: "txTwo", Fee: 5})
 
 	txs := mp.GetTransactionsForBlock(10) // more than 2
 	assert.Len(t, txs, 2, "Should only return 2 total transactions")
@@ -324,8 +324,6 @@ func TestMempoolLargeParallelInsertions(t *testing.T) {
 	mp := NewMempool()
 	mpImpl := mp.(*mempoolImpl)
 	mpImpl.maxSize = 20
-
-	rand.Seed(time.Now().UnixNano())
 	var wg sync.WaitGroup
 
 	insertCount := 100
@@ -336,7 +334,7 @@ func TestMempoolLargeParallelInsertions(t *testing.T) {
 			defer wg.Done()
 			fee := uint64(rand.Intn(100) + 1)
 			txID := fmt.Sprintf("txLarge-%d-Fee%d", idx, fee)
-			mp.AddTransaction(&Transaction{ID: txID, Fee: fee})
+			_ = mp.AddTransaction(&Transaction{ID: txID, Fee: fee})
 		}(i)
 	}
 
@@ -361,7 +359,7 @@ func TestMempoolMultiBlockCycle(t *testing.T) {
 	// Add 5 transactions
 	for i := 0; i < 5; i++ {
 		txID := fmt.Sprintf("blockCycle-%d", i)
-		_ = mp.AddTransaction(&Transaction{ID: txID, Fee: uint64(i+1)})
+		_ = mp.AddTransaction(&Transaction{ID: txID, Fee: uint64(i + 1)})
 	}
 	assert.Equal(t, 5, mp.Size())
 
@@ -373,7 +371,7 @@ func TestMempoolMultiBlockCycle(t *testing.T) {
 	// Add 2 more transactions
 	for i := 5; i < 7; i++ {
 		txID := fmt.Sprintf("blockCycle-%d", i)
-		_ = mp.AddTransaction(&Transaction{ID: txID, Fee: uint64(i+1)})
+		_ = mp.AddTransaction(&Transaction{ID: txID, Fee: uint64(i + 1)})
 	}
 
 	// Retrieve top 3 again
